@@ -1,0 +1,207 @@
+import React, { useState } from 'react';
+import { Link, useLocation, Outlet } from 'react-router-dom';
+import { useAuth } from '../auth/useAuth.js';
+
+export const AppLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
+  const { user, logout } = useAuth();
+  const location = useLocation();
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  const getRoleLabel = (role?: string) => {
+    switch (role) {
+      case 'ADMIN':
+        return 'Administrador';
+      case 'TEACHER':
+        return 'Maestro';
+      case 'STUDENT':
+        return 'Alumno';
+      default:
+        return role || '';
+    }
+  };
+
+  const renderNavItems = () => {
+    if (!user) return null;
+
+    switch (user.role) {
+      case 'ADMIN':
+        return (
+          <>
+            <Link
+              to="/app"
+              id="nav-home"
+              className={`sidebar-nav-item ${location.pathname === '/app' ? 'active' : ''}`}
+            >
+              Inicio
+            </Link>
+            <Link
+              to="/app/subjects"
+              id="nav-subjects"
+              className={`sidebar-nav-item ${location.pathname.startsWith('/app/subjects') ? 'active' : ''}`}
+            >
+              Materias
+            </Link>
+            <Link
+              to="/app/teachers"
+              id="nav-teachers"
+              className={`sidebar-nav-item ${location.pathname.startsWith('/app/teachers') ? 'active' : ''}`}
+            >
+              Maestros
+            </Link>
+            <Link
+              to="/app/courses"
+              id="nav-courses"
+              className={`sidebar-nav-item ${location.pathname.startsWith('/app/courses') ? 'active' : ''}`}
+            >
+              Cursos
+            </Link>
+            <Link
+              to="/app/admin/users"
+              id="nav-admin-users"
+              className={`sidebar-nav-item ${location.pathname.startsWith('/app/admin/users') ? 'active' : ''}`}
+            >
+              Usuarios
+            </Link>
+            <Link
+              to="/app/profile"
+              id="nav-profile"
+              className={`sidebar-nav-item ${location.pathname === '/app/profile' ? 'active' : ''}`}
+            >
+              Mi perfil
+            </Link>
+          </>
+        );
+
+      case 'TEACHER':
+        return (
+          <>
+            <Link
+              to="/app"
+              id="nav-home"
+              className={`sidebar-nav-item ${location.pathname === '/app' ? 'active' : ''}`}
+            >
+              Inicio
+            </Link>
+            <Link
+              to="/app/courses"
+              id="nav-courses"
+              className={`sidebar-nav-item ${location.pathname.startsWith('/app/courses') ? 'active' : ''}`}
+            >
+              Mis cursos
+            </Link>
+            <Link
+              to="/app/students"
+              id="nav-students"
+              className={`sidebar-nav-item ${location.pathname.startsWith('/app/students') ? 'active' : ''}`}
+            >
+              Alumnos
+            </Link>
+            <Link
+              to="/app/profile"
+              id="nav-profile"
+              className={`sidebar-nav-item ${location.pathname === '/app/profile' ? 'active' : ''}`}
+            >
+              Mi perfil
+            </Link>
+          </>
+        );
+
+      case 'STUDENT':
+        return (
+          <>
+            <Link
+              to="/app"
+              id="nav-home"
+              className={`sidebar-nav-item ${location.pathname === '/app' ? 'active' : ''}`}
+            >
+              Inicio
+            </Link>
+            <Link
+              to="/app/courses"
+              id="nav-courses"
+              className={`sidebar-nav-item ${location.pathname.startsWith('/app/courses') ? 'active' : ''}`}
+            >
+              Mis cursos
+            </Link>
+            <Link
+              to="/app/progress"
+              id="nav-progress"
+              className={`sidebar-nav-item ${location.pathname.startsWith('/app/progress') ? 'active' : ''}`}
+            >
+              Mi progreso
+            </Link>
+            <Link
+              to="/app/profile"
+              id="nav-profile"
+              className={`sidebar-nav-item ${location.pathname === '/app/profile' ? 'active' : ''}`}
+            >
+              Mi perfil
+            </Link>
+          </>
+        );
+
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <div className="app-wrapper">
+      <header className="app-header">
+        <div className="header-brand-container">
+          <button
+            className="mobile-nav-toggle"
+            id="mobile-nav-toggle"
+            onClick={() => setMobileOpen(!mobileOpen)}
+            aria-label="Abrir menú"
+          >
+            ☰
+          </button>
+          <Link to="/app" className="header-brand" id="brand-link">
+            PotroLearn
+          </Link>
+        </div>
+
+        <div className="header-user-section">
+          {user && (
+            <Link
+              to="/app/profile"
+              className="user-badge-info"
+              id="header-user-profile-link"
+              title="Ver mi perfil"
+              style={{ textDecoration: 'none' }}
+            >
+              <span className="user-name-text" id="user-display-name">
+                {user.name}
+              </span>
+              <span
+                className={`role-pill ${user.role.toLowerCase()}`}
+                id="user-display-role"
+              >
+                {getRoleLabel(user.role)}
+              </span>
+            </Link>
+          )}
+          <button
+            onClick={() => logout()}
+            className="btn-logout"
+            id="btn-logout"
+            title="Cerrar sesión"
+          >
+            Cerrar sesión
+          </button>
+        </div>
+      </header>
+
+      <div className="app-body">
+        <aside className={`app-sidebar ${mobileOpen ? 'mobile-open' : ''}`}>
+          {renderNavItems()}
+        </aside>
+
+        <main className="app-main-content">
+          {children ? <>{children}</> : <Outlet />}
+        </main>
+      </div>
+    </div>
+  );
+};

@@ -1,0 +1,404 @@
+// Schema de Prisma para PotroLearn Monorepo (Versión V1 Aprobada + Auth Schema V1 Definitivo)
+// Documentación conceptual de referencia: docs/domain-model.md y docs/data-dictionary.md
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==========================================
+// ENUMS OFICIALES V1
+// ==========================================
+
+enum Role {
+  ADMIN
+  TEACHER
+  STUDENT
+}
+
+enum CourseStatus {
+  DRAFT
+  ACTIVE
+  FINISHED
+  ARCHIVED
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  COMPLETED
+  DROPPED
+}
+
+enum AssessmentType {
+  DIAGNOSTIC
+  PRACTICE
+  QUIZ
+  EXAM
+  FINAL
+}
+
+enum QuestionType {
+  MULTIPLE_CHOICE
+  MULTIPLE_SELECT
+  TRUE_FALSE
+  NUMERIC
+  OPEN_TEXT
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+  GRADED
+}
+
+enum TokenType {
+  ACCOUNT_ACTIVATION
+  PASSWORD_RESET
+}
+
+// ==========================================
+// 1. IDENTIDAD, USUARIOS Y AUTENTICACIÓN
+// ==========================================
+
+model User {
+  id                 String    @id @default(uuid())
+  email              String    @unique
+  name               String
+  role               Role
+  passwordHash       String
+  mustChangePassword Boolean   @default(false)
+  isActive           Boolean   @default(true)
+  activatedAt        DateTime?
+  lastLoginAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  studentProfile  StudentProfile?
+  createdCourses  Course[]         @relation("CreatedCourses")
+  courseTeachers  CourseTeacher[]
+  enrollments     Enrollment[]
+  attempts        Attempt[]
+  authTokens      AuthToken[]
+  refreshSessions RefreshSession[]
+
+  @@map("users")
+}
+
+model StudentProfile {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  studentNumber String   @unique
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("student_profiles")
+}
+
+model AuthToken {
+  id        String    @id @default(uuid())
+  userId    String
+  type      TokenType
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([expiresAt])
+  @@map("auth_tokens")
+}
+
+model RefreshSession {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_sessions")
+}
+
+// ==========================================
+// 2. ESTRUCTURA ACADÉMICA Y CURSOS
+// ==========================================
+
+model Subject {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  description String?  @db.Text
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  courses   Course[]
+  questions Question[]
+
+  @@map("subjects")
+}
+
+model Course {
+  id          String       @id @default(uuid())
+  subjectId   String
+  createdById String
+  name        String
+  description String?      @db.Text
+  startDate   DateTime
+  endDate     DateTime
+  status      CourseStatus @default(DRAFT)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  archivedAt  DateTime?
+
+  subject        Subject         @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  createdBy      User            @relation("CreatedCourses", fields: [createdById], references: [id], onDelete: Restrict)
+  courseTeachers CourseTeacher[]
+  enrollments    Enrollment[]
+  modules        Module[]
+  assessments    Assessment[]
+
+  @@index([subjectId])
+  @@index([createdById])
+  @@map("courses")
+}
+
+model CourseTeacher {
+  id         String   @id @default(uuid())
+  courseId   String
+  teacherId  String
+  assignedAt DateTime @default(now())
+
+  course  Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  teacher User   @relation(fields: [teacherId], references: [id], onDelete: Restrict)
+
+  @@unique([courseId, teacherId])
+  @@map("course_teachers")
+}
+
+model Enrollment {
+  id          String           @id @default(uuid())
+  studentId   String
+  courseId    String
+  enrolledAt  DateTime         @default(now())
+  status      EnrollmentStatus @default(ACTIVE)
+  completedAt DateTime?
+  finalGrade  Decimal?         @db.Decimal(5, 2)
+
+  student        User             @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  course         Course           @relation(fields: [courseId], references: [id], onDelete: Restrict)
+  lessonProgress LessonProgress[]
+
+  @@unique([courseId, studentId])
+  @@index([studentId])
+  @@index([courseId])
+  @@map("enrollments")
+}
+
+// ==========================================
+// 3. CONTENIDO PEDAGÓGICO Y PROGRESO
+// ==========================================
+
+model Module {
+  id          String   @id @default(uuid())
+  courseId    String
+  title       String
+  description String?  @db.Text
+  order       Int
+  isPublished Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  course      Course       @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons     Lesson[]
+  assessments Assessment[]
+
+  @@index([courseId])
+  @@map("modules")
+}
+
+model Lesson {
+  id          String   @id @default(uuid())
+  moduleId    String
+  title       String
+  description String?  @db.Text
+  content     String?  @db.Text
+  order       Int
+  isPublished Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  module         Module           @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  lessonProgress LessonProgress[]
+  assessments    Assessment[]
+
+  @@index([moduleId])
+  @@map("lessons")
+}
+
+model LessonProgress {
+  id           String   @id @default(uuid())
+  enrollmentId String
+  lessonId     String
+  completedAt  DateTime @default(now())
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  lesson     Lesson     @relation(fields: [lessonId], references: [id], onDelete: Restrict)
+
+  @@unique([enrollmentId, lessonId])
+  @@map("lesson_progress")
+}
+
+// ==========================================
+// 4. EVALUACIONES Y BANCO DE PREGUNTAS
+// ==========================================
+
+model Assessment {
+  id               String         @id @default(uuid())
+  courseId         String
+  moduleId         String?
+  lessonId         String?
+  title            String
+  description      String?        @db.Text
+  type             AssessmentType
+  weight           Decimal        @default(0.0) @db.Decimal(5, 2)
+  availableFrom    DateTime?
+  availableUntil   DateTime?
+  timeLimitMinutes Int?
+  maxAttempts      Int?
+  passingScore     Decimal?       @db.Decimal(5, 2)
+  isPublished      Boolean        @default(false)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  course              Course               @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  module              Module?              @relation(fields: [moduleId], references: [id], onDelete: SetNull)
+  lesson              Lesson?              @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  assessmentQuestions AssessmentQuestion[]
+  attempts            Attempt[]
+
+  @@index([courseId])
+  @@index([moduleId])
+  @@index([lessonId])
+  @@map("assessments")
+}
+
+model Question {
+  id            String       @id @default(uuid())
+  subjectId     String?
+  statement     String       @db.Text
+  type          QuestionType
+  defaultPoints Decimal      @default(10.0) @db.Decimal(5, 2)
+  explanation   String?      @db.Text
+  correctNumericValue Decimal? @db.Decimal(10, 4)
+  numericTolerance    Decimal  @default(0.0001) @db.Decimal(10, 4)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  subject             Subject?             @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  options             QuestionOption[]
+  assessmentQuestions AssessmentQuestion[]
+  answers             Answer[]
+
+  @@index([subjectId])
+  @@map("questions")
+}
+
+model QuestionOption {
+  id          String  @id @default(uuid())
+  questionId  String
+  text        String  @db.Text
+  isCorrect   Boolean
+  explanation String? @db.Text
+  order       Int
+
+  question      Question       @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answerOptions AnswerOption[]
+
+  @@map("question_options")
+}
+
+model AssessmentQuestion {
+  id           String  @id @default(uuid())
+  assessmentId String
+  questionId   String
+  points       Decimal @db.Decimal(5, 2)
+  order        Int
+
+  assessment Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  question   Question   @relation(fields: [questionId], references: [id], onDelete: Restrict)
+
+  @@unique([assessmentId, questionId])
+  @@map("assessment_questions")
+}
+
+// ==========================================
+// 5. INTENTOS Y RESPUESTAS
+// ==========================================
+
+model Attempt {
+  id            String        @id @default(uuid())
+  studentId     String
+  assessmentId  String
+  attemptNumber Int
+  startedAt     DateTime      @default(now())
+  submittedAt   DateTime?
+  score         Decimal?      @db.Decimal(5, 2)
+  status        AttemptStatus @default(IN_PROGRESS)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  student    User       @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  assessment Assessment @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
+  answers    Answer[]
+
+  @@unique([studentId, assessmentId, attemptNumber])
+  @@index([studentId])
+  @@index([assessmentId])
+  @@map("attempts")
+}
+
+model Answer {
+  id           String    @id @default(uuid())
+  attemptId    String
+  questionId   String
+  numericValue Decimal?  @db.Decimal(10, 4)
+  textValue    String?   @db.Text
+  pointsEarned Decimal?  @db.Decimal(5, 2)
+  isCorrect    Boolean?
+  feedback     String?   @db.Text
+  gradedAt     DateTime?
+
+  attempt       Attempt        @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question      Question       @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  answerOptions AnswerOption[]
+
+  @@unique([attemptId, questionId])
+  @@index([attemptId])
+  @@map("answers")
+}
+
+model AnswerOption {
+  id       String @id @default(uuid())
+  answerId String
+  optionId String
+
+  answer Answer         @relation(fields: [answerId], references: [id], onDelete: Cascade)
+  option QuestionOption @relation(fields: [optionId], references: [id], onDelete: Restrict)
+
+  @@unique([answerId, optionId])
+  @@map("answer_options")
+}
