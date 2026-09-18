@@ -145,15 +145,17 @@ export const AssessmentDetailPage: React.FC = () => {
             📋 Centro de Calificación / Revisar Intentos
           </Link>
         )}
-        <button
-          type="button"
-          className="btn btn-primary btn-large"
-          onClick={handleStartOrResume}
-          disabled={starting}
-          style={{ width: 'auto' }}
-        >
-          {starting ? 'Iniciando...' : 'Comenzar / Reanudar Evaluación'}
-        </button>
+        {user?.role === 'STUDENT' && (
+          <button
+            type="button"
+            className="btn btn-primary btn-large"
+            onClick={handleStartOrResume}
+            disabled={starting}
+            style={{ width: 'auto' }}
+          >
+            {starting ? 'Iniciando...' : 'Comenzar / Reanudar Evaluación'}
+          </button>
+        )}
       </div>
     </div>
   );

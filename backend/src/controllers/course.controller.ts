@@ -299,4 +299,22 @@ export class CourseController {
       res.status(500).json({ error: { code: 'INTERNAL_SERVER_ERROR', message: 'Error interno del servidor' } });
     }
   }
+
+  /**
+   * GET /api/courses/:courseId/search-students
+   */
+  public static async searchStudents(req: Request, res: Response): Promise<void> {
+    try {
+      const { courseId } = req.params;
+      const query = (req.query.query || req.query.q || '') as string;
+      const results = await UserProvisioningService.searchStudentsForCourse(courseId, query);
+      res.status(200).json({ data: results });
+    } catch (error: unknown) {
+      if (error instanceof AuthError) {
+        res.status(error.statusCode).json({ error: { code: error.code, message: error.message } });
+        return;
+      }
+      res.status(500).json({ error: { code: 'INTERNAL_SERVER_ERROR', message: 'Error interno del servidor' } });
+    }
+  }
 }

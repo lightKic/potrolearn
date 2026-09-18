@@ -1,6 +1,6 @@
 import nodemailer, { Transporter } from 'nodemailer';
 import { env } from '../../config/env';
-import { IEmailService, AccountInvitationEmailInput, PasswordResetEmailInput } from './email.service.interface';
+import { IEmailService, AccountInvitationEmailInput, PasswordResetEmailInput, CourseEnrollmentEmailInput } from './email.service.interface';
 
 /**
  * Helper para escapar HTML dinámico e impedir inyección en clientes de correo.
@@ -218,6 +218,75 @@ Si no solicitaste este cambio, ponte en contacto de inmediato con la administrac
       return true;
     } catch (error) {
       console.error(`[SMTP ERROR] Fallo al enviar correo de restablecimiento a ${recipientEmail}:`, error instanceof Error ? error.message : error);
+      return false;
+    }
+  }
+
+  /**
+   * Envía el correo electrónico informativo a un alumno existente al ser agregado a un curso.
+   */
+  public async sendCourseEnrollmentNotification(input: CourseEnrollmentEmailInput): Promise<boolean> {
+    const { recipientEmail, recipientName, courseName } = input;
+    const transporter = this.getTransporter();
+
+    if (!transporter) {
+      if (env.nodeEnv === 'test' || process.env.NODE_ENV === 'test') {
+        console.log(`[SMTP MOCK] Correo de inclusión a curso simulado enviado a ${recipientEmail}`);
+        return true;
+      }
+      console.error(`[SMTP CONFIG ERROR] No se envió el correo a ${recipientEmail}: Faltan EMAIL_USER o EMAIL_APP_PASSWORD en .env`);
+      return false;
+    }
+
+    const loginUrl = `${env.frontendUrl}`;
+    const safeName = escapeHtml(recipientName);
+    const safeCourse = escapeHtml(courseName);
+
+    const textContent = `PotroLearn — Inclusión a Curso
+
+Hola ${recipientName},
+
+Has sido agregado al curso:
+
+${courseName}
+
+Ya puedes ingresar a PotroLearn con tu cuenta existente.
+
+Enlace de acceso: ${loginUrl}
+
+Si ya tienes una sesión iniciada, podrás acceder al curso desde tu panel de cursos.
+`;
+
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; padding: 24px; background-color: #ffffff;">
+        <h2 style="color: #004691; margin-top: 0;">PotroLearn — Inclusión a Curso</h2>
+        <p>Hola <strong>${safeName}</strong>,</p>
+        <p>Has sido agregado exitosamente al curso <strong>${safeCourse}</strong> en la plataforma <strong>PotroLearn</strong>.</p>
+        
+        <p>Ya puedes ingresar a PotroLearn utilizando las credenciales de tu cuenta existente.</p>
+
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${loginUrl}" style="background-color: #004691; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Ingresar a PotroLearn</a>
+        </div>
+
+        <p style="font-size: 13px; color: #6c757d; margin-top: 24px; border-top: 1px solid #e0e0e0; padding-top: 12px;">
+          Si ya tienes una sesión iniciada en tu navegador, podrás acceder al curso directamente desde tu panel de cursos.
+        </p>
+      </div>
+    `;
+
+    try {
+      await transporter.sendMail({
+        from: env.emailFrom,
+        to: recipientEmail,
+        subject: `Has sido agregado a un curso en PotroLearn`,
+        text: textContent,
+        html: htmlContent,
+      });
+      console.log(`[SMTP GMAIL] Correo de inclusión a curso enviado exitosamente a ${recipientEmail}`);
+      return true;
+    } catch (error) {
+      console.error(`[SMTP ERROR] Falló el envío del correo de inclusión a curso a ${recipientEmail}:`, error instanceof Error ? error.message : error);
       return false;
     }
   }

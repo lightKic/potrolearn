@@ -95,6 +95,17 @@ router.delete(
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
+// GET /api/courses/:courseId/search-students (ADMIN, TEACHER asignado)
+router.get(
+  '/:courseId/search-students',
+  authenticate,
+  requireActiveUser,
+  requirePasswordChanged,
+  requireRole(Role.ADMIN, Role.TEACHER),
+  requireCourseTeacher,
+  CourseController.searchStudents
+);
+
 // GET /api/courses/:courseId/students (ADMIN, TEACHER asignado)
 router.get(
   '/:courseId/students',

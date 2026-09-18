@@ -56,6 +56,18 @@ export const CourseDetailPage: React.FC = () => {
   // Modal de confirmación para cambio de estado
   const [pendingTargetStatus, setPendingTargetStatus] = useState<CourseStatus | null>(null);
 
+  // Estados para Alta de Alumnos (UX-002)
+  const [isAddStudentModalOpen, setIsAddStudentModalOpen] = useState(false);
+  const [addStudentTab, setAddStudentTab] = useState<'SELECT' | 'SEARCH' | 'REGISTER' | 'EXCEL'>('SELECT');
+
+  // Estados de Búsqueda de Alumno Existente
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<{ id: string; name: string; email: string; studentNumber: string; isAlreadyEnrolled: boolean }[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchSubmitted, setSearchSubmitted] = useState(false);
+  const [enrollingStudentId, setEnrollingStudentId] = useState<string | null>(null);
+
   // Estados para Alta Manual de Alumnos
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [manualName, setManualName] = useState('');
@@ -418,13 +430,85 @@ export const CourseDetailPage: React.FC = () => {
     }
   };
 
-  // Alta Manual de Alumno
-  const handleOpenManualModal = () => {
+  // Modal Principal de Agregar Alumno (UX-002)
+  const handleOpenAddStudentModal = (initialTab: 'SELECT' | 'SEARCH' | 'REGISTER' | 'EXCEL' = 'SELECT') => {
+    setAddStudentTab(initialTab);
+    setSearchQuery('');
+    setSearchResults([]);
+    setSearchError(null);
+    setSearchSubmitted(false);
     setManualName('');
     setManualStudentNumber('');
     setManualEmail('');
     setManualError(null);
-    setIsManualModalOpen(true);
+    setImportFile(null);
+    setImportPreview(null);
+    setImportConfirmResult(null);
+    setImportError(null);
+    setIsAddStudentModalOpen(true);
+  };
+
+  // Buscar Alumno Existente
+  const handleSearchStudents = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!courseId || !searchQuery.trim()) return;
+    setSearchLoading(true);
+    setSearchError(null);
+    setSearchSubmitted(true);
+    try {
+      const results = await CourseServiceAPI.searchStudents(courseId, searchQuery.trim());
+      setSearchResults(results);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setSearchError(err.message);
+      } else {
+        setSearchError('Error al buscar estudiantes.');
+      }
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
+  // Agregar Alumno Existente desde Resultados de Búsqueda
+  const handleAddExistingStudent = async (student: { name: string; email: string; studentNumber: string; id: string }) => {
+    if (!courseId) return;
+    setEnrollingStudentId(student.id);
+    setSearchError(null);
+    try {
+      const res = await CourseServiceAPI.enrollStudent(courseId, {
+        name: student.name,
+        studentNumber: student.studentNumber,
+        email: student.email,
+      });
+
+      setIsAddStudentModalOpen(false);
+      setActionError(null);
+
+      if (res.isNewStudent) {
+        if (res.emailSent) {
+          setActionSuccess(`Alumno registrado y agregado correctamente.\nSe envió el correo de activación a: ${student.email}`);
+        } else {
+          setActionSuccess('Alumno registrado y agregado correctamente.\nNo fue posible enviar el correo de activación.');
+        }
+      } else {
+        if (res.emailSent) {
+          setActionSuccess(`Alumno agregado correctamente al curso.\nSe envió un correo de notificación a: ${student.email}`);
+        } else {
+          setActionSuccess('Alumno agregado correctamente al curso.\nNo fue posible enviar el correo de notificación.');
+        }
+      }
+
+      await fetchCourseDetail();
+      await refreshStudentsList();
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setSearchError(err.message);
+      } else {
+        setSearchError('Error al agregar el alumno al curso.');
+      }
+    } finally {
+      setEnrollingStudentId(null);
+    }
   };
 
   const handleManualSubmit = async (e: React.FormEvent) => {
@@ -432,7 +516,11 @@ export const CourseDetailPage: React.FC = () => {
     if (!courseId) return;
     setManualError(null);
 
-    if (!manualName.trim() || !manualStudentNumber.trim() || !manualEmail.trim()) {
+    const name = manualName.trim();
+    const studentNumber = manualStudentNumber.trim();
+    const email = manualEmail.trim();
+
+    if (!name || !studentNumber || !email) {
       setManualError('Todos los campos son obligatorios.');
       return;
     }
@@ -440,22 +528,27 @@ export const CourseDetailPage: React.FC = () => {
     setManualSubmitting(true);
     try {
       const res = await CourseServiceAPI.enrollStudent(courseId, {
-        name: manualName.trim(),
-        studentNumber: manualStudentNumber.trim(),
-        email: manualEmail.trim(),
+        name,
+        studentNumber,
+        email,
       });
 
+      setIsAddStudentModalOpen(false);
       setIsManualModalOpen(false);
       setActionError(null);
 
       if (res.isNewStudent) {
         if (res.emailSent) {
-          setActionSuccess('Alumno agregado correctamente. Se envió una invitación por correo.');
+          setActionSuccess(`Alumno registrado y agregado correctamente.\nSe envió el correo de activación a: ${email}`);
         } else {
-          setActionSuccess('El alumno fue agregado, pero el correo no pudo enviarse. Puedes reenviar la invitación.');
+          setActionSuccess('Alumno registrado y agregado correctamente.\nNo fue posible enviar el correo de activación.');
         }
       } else {
-        setActionSuccess('Alumno inscrito correctamente en el curso.');
+        if (res.emailSent) {
+          setActionSuccess(`Alumno agregado correctamente al curso.\nSe envió un correo de notificación a: ${email}`);
+        } else {
+          setActionSuccess('Alumno agregado correctamente al curso.\nNo fue posible enviar el correo de notificación.');
+        }
       }
 
       await fetchCourseDetail();
@@ -472,14 +565,6 @@ export const CourseDetailPage: React.FC = () => {
   };
 
   // Importación Excel
-  const handleOpenImportModal = () => {
-    setImportFile(null);
-    setImportPreview(null);
-    setImportConfirmResult(null);
-    setImportError(null);
-    setIsImportModalOpen(true);
-  };
-
   const handleImportFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null;
     setImportFile(file);
@@ -899,7 +984,7 @@ export const CourseDetailPage: React.FC = () => {
                 id="btn-manual-add-student"
                 className="btn-primary"
                 style={{ width: 'auto' }}
-                onClick={handleOpenManualModal}
+                onClick={() => handleOpenAddStudentModal('SELECT')}
                 disabled={isEnrollmentBlocked}
               >
                 + Agregar alumno
@@ -909,7 +994,7 @@ export const CourseDetailPage: React.FC = () => {
                 id="btn-import-excel"
                 className="btn-secondary"
                 style={{ width: 'auto' }}
-                onClick={handleOpenImportModal}
+                onClick={() => handleOpenAddStudentModal('EXCEL')}
                 disabled={isEnrollmentBlocked}
               >
                 📁 Importar Excel
@@ -1310,7 +1395,7 @@ export const CourseDetailPage: React.FC = () => {
                   style={{ width: 'auto', padding: '6px 16px', fontSize: '0.875rem' }}
                   onClick={() => navigate(`/app/courses/${courseId}/assessments/${ass.id}`)}
                 >
-                  Ver / Realizar Evaluación →
+                  {user?.role === 'STUDENT' ? 'Ver / Realizar Evaluación →' : 'Ver / Administrar Evaluación →'}
                 </button>
               </div>
             ))}
@@ -1318,8 +1403,8 @@ export const CourseDetailPage: React.FC = () => {
         )}
       </div>
 
-      {/* Modal de Alta Manual de Alumno */}
-      {isManualModalOpen && (
+      {/* Modal Principal de Agregar Alumnos (UX-002 Flow) */}
+      {(isAddStudentModalOpen || isManualModalOpen || isImportModalOpen) && (
         <div
           style={{
             position: 'fixed',
@@ -1335,286 +1420,532 @@ export const CourseDetailPage: React.FC = () => {
             padding: '16px',
           }}
         >
-          <div className="auth-card" style={{ maxWidth: '480px' }}>
-            <h2 className="page-title" style={{ fontSize: '1.25rem', marginBottom: '16px' }}>
-              Agregar Alumno Manualmente
-            </h2>
-
-            {manualError && (
-              <div className="alert alert-danger" style={{ marginBottom: '16px' }}>
-                {manualError}
-              </div>
-            )}
-
-            <form onSubmit={handleManualSubmit}>
-              <div className="form-group">
-                <label className="form-label" htmlFor="manual-student-name">
-                  Nombre completo
-                </label>
-                <input
-                  id="manual-student-name"
-                  type="text"
-                  className="form-input"
-                  placeholder="Ej: Juan Pérez López"
-                  value={manualName}
-                  onChange={(e) => setManualName(e.target.value)}
-                  disabled={manualSubmitting}
-                  required
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label" htmlFor="manual-student-number">
-                  Matrícula
-                </label>
-                <input
-                  id="manual-student-number"
-                  type="text"
-                  className="form-input"
-                  placeholder="Ej: 00012345"
-                  value={manualStudentNumber}
-                  onChange={(e) => setManualStudentNumber(e.target.value)}
-                  disabled={manualSubmitting}
-                  required
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label" htmlFor="manual-student-email">
-                  Correo electrónico
-                </label>
-                <input
-                  id="manual-student-email"
-                  type="email"
-                  className="form-input"
-                  placeholder="alumno@ejemplo.com"
-                  value={manualEmail}
-                  onChange={(e) => setManualEmail(e.target.value)}
-                  disabled={manualSubmitting}
-                  required
-                />
-              </div>
-
-              <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  style={{ flex: 1 }}
-                  onClick={() => setIsManualModalOpen(false)}
-                  disabled={manualSubmitting}
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="btn-primary"
-                  style={{ flex: 1 }}
-                  disabled={manualSubmitting}
-                >
-                  {manualSubmitting ? 'Inscribiendo...' : 'Inscribir alumno'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Modal de Importación Excel */}
-      {isImportModalOpen && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 100,
-            padding: '16px',
-          }}
-        >
-          <div className="auth-card" style={{ maxWidth: '720px', maxHeight: '90vh', overflowY: 'auto' }}>
-            <h2 className="page-title" style={{ fontSize: '1.25rem', marginBottom: '8px' }}>
-              Importación Masiva desde Excel (.xlsx)
-            </h2>
-            <p className="page-description" style={{ marginBottom: '16px', fontSize: '0.875rem' }}>
-              El archivo debe incluir las columnas encabezado: <strong>nombre</strong>, <strong>matrícula</strong> y <strong>correo</strong>.
-            </p>
-
-            {importError && (
-              <div className="alert alert-danger" style={{ marginBottom: '16px' }}>
-                {importError}
-              </div>
-            )}
-
-            {/* Paso 1: Selección de archivo */}
-            {!importPreview && !importConfirmResult && (
+          <div
+            className="auth-card"
+            style={{
+              maxWidth: addStudentTab === 'EXCEL' ? '720px' : '540px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+            }}
+          >
+            {/* Header del Modal */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <div>
-                <div className="form-group">
-                  <label className="form-label" htmlFor="excel-file-input">
-                    Seleccionar archivo Excel
-                  </label>
-                  <input
-                    id="excel-file-input"
-                    type="file"
-                    accept=".xlsx"
-                    className="form-input"
-                    onChange={handleImportFileChange}
-                    disabled={importLoading}
-                  />
-                </div>
-
-                <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
+                {addStudentTab !== 'SELECT' && (
                   <button
                     type="button"
                     className="btn-secondary"
-                    style={{ flex: 1 }}
-                    onClick={() => setIsImportModalOpen(false)}
-                    disabled={importLoading}
+                    style={{ padding: '2px 8px', fontSize: '0.775rem', marginBottom: '6px' }}
+                    onClick={() => setAddStudentTab('SELECT')}
                   >
-                    Cancelar
+                    ← Volver a opciones
                   </button>
+                )}
+                <h2 className="page-title" style={{ fontSize: '1.25rem', margin: 0 }}>
+                  {addStudentTab === 'SELECT' && 'Agregar alumno al curso'}
+                  {addStudentTab === 'SEARCH' && 'Buscar alumno existente'}
+                  {addStudentTab === 'REGISTER' && 'Registrar alumno nuevo'}
+                  {addStudentTab === 'EXCEL' && 'Importar alumnos desde Excel'}
+                </h2>
+              </div>
+              <button
+                type="button"
+                style={{ background: 'none', border: 'none', fontSize: '1.25rem', cursor: 'pointer', color: 'var(--color-muted)' }}
+                onClick={() => {
+                  setIsAddStudentModalOpen(false);
+                  setIsManualModalOpen(false);
+                  setIsImportModalOpen(false);
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* TAB 1: SELECT (3 OPCIONES) */}
+            {addStudentTab === 'SELECT' && (
+              <div>
+                <p style={{ fontSize: '0.875rem', color: 'var(--color-muted)', marginBottom: '20px' }}>
+                  Selecciona la modalidad adecuada para incorporar alumnos a este curso:
+                </p>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '24px' }}>
+                  {/* Opción 1: Buscar existente */}
+                  <div
+                    style={{
+                      padding: '16px',
+                      border: '1px solid var(--color-border)',
+                      borderRadius: 'var(--radius-md, 8px)',
+                      backgroundColor: 'var(--color-background)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: '1rem', color: 'var(--color-text)' }}>
+                      🔎 Buscar alumno existente
+                    </div>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--color-muted)' }}>
+                      Encuentra una cuenta ya registrada en PotroLearn por su nombre, matrícula o correo electrónico.
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      style={{ width: 'auto', alignSelf: 'flex-start', marginTop: '4px' }}
+                      onClick={() => setAddStudentTab('SEARCH')}
+                    >
+                      Buscar alumno
+                    </button>
+                  </div>
+
+                  {/* Opción 2: Registrar nuevo */}
+                  <div
+                    style={{
+                      padding: '16px',
+                      border: '1px solid var(--color-border)',
+                      borderRadius: 'var(--radius-md, 8px)',
+                      backgroundColor: 'var(--color-background)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: '1rem', color: 'var(--color-text)' }}>
+                      👤 Registrar alumno nuevo
+                    </div>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--color-muted)' }}>
+                      Crea una cuenta nueva para un alumno que aún no tiene perfil en la plataforma.
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      style={{ width: 'auto', alignSelf: 'flex-start', marginTop: '4px' }}
+                      onClick={() => setAddStudentTab('REGISTER')}
+                    >
+                      Registrar alumno
+                    </button>
+                  </div>
+
+                  {/* Opción 3: Importar desde Excel */}
+                  <div
+                    style={{
+                      padding: '16px',
+                      border: '1px solid var(--color-border)',
+                      borderRadius: 'var(--radius-md, 8px)',
+                      backgroundColor: 'var(--color-background)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: '1rem', color: 'var(--color-text)' }}>
+                      📊 Importar desde Excel
+                    </div>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--color-muted)' }}>
+                      Agrega múltiples alumnos de forma masiva utilizando una plantilla de Excel (.xlsx).
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      style={{ width: 'auto', alignSelf: 'flex-start', marginTop: '4px' }}
+                      onClick={() => setAddStudentTab('EXCEL')}
+                    >
+                      Importar Excel
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                   <button
                     type="button"
-                    className="btn-primary"
-                    style={{ flex: 1 }}
-                    onClick={handlePreviewImport}
-                    disabled={!importFile || importLoading}
+                    className="btn-secondary"
+                    onClick={() => {
+                      setIsAddStudentModalOpen(false);
+                      setIsManualModalOpen(false);
+                      setIsImportModalOpen(false);
+                    }}
                   >
-                    {importLoading ? 'Analizando archivo...' : 'Previsualizar'}
+                    Cancelar
                   </button>
                 </div>
               </div>
             )}
 
-            {/* Paso 2: Previsualización de filas */}
-            {importPreview && !importConfirmResult && (
+            {/* TAB 2: SEARCH (BUSCAR ALUMNO EXISTENTE) */}
+            {addStudentTab === 'SEARCH' && (
               <div>
-                {/* Resumen de Clasificación */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: '8px', marginBottom: '16px' }}>
-                  <div style={{ padding: '8px', backgroundColor: 'var(--color-background)', border: '1px solid var(--color-border)', borderRadius: '6px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--color-muted)' }}>Total</div>
-                    <strong style={{ fontSize: '1.1rem' }}>{importPreview.summary.total}</strong>
+                <form onSubmit={handleSearchStudents} style={{ marginBottom: '16px' }}>
+                  <div className="form-group" style={{ marginBottom: '8px' }}>
+                    <label className="form-label" htmlFor="search-student-input">
+                      Criterio de búsqueda (Nombre, Matrícula o Correo)
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <input
+                        id="search-student-input"
+                        type="text"
+                        className="form-input"
+                        placeholder="Ej. Juan Pérez / 202012345 / juan@example.com"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        disabled={searchLoading}
+                      />
+                      <button
+                        type="submit"
+                        className="btn-primary"
+                        style={{ width: 'auto', whiteSpace: 'nowrap' }}
+                        disabled={searchLoading || !searchQuery.trim()}
+                      >
+                        {searchLoading ? 'Buscando...' : 'Buscar'}
+                      </button>
+                    </div>
                   </div>
-                  <div style={{ padding: '8px', backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '6px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#047857' }}>Nuevos</div>
-                    <strong style={{ fontSize: '1.1rem', color: '#047857' }}>{importPreview.summary.new}</strong>
+                </form>
+
+                {searchError && (
+                  <div className="alert alert-danger" style={{ marginBottom: '16px' }}>
+                    {searchError}
                   </div>
-                  <div style={{ padding: '8px', backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#1d4ed8' }}>Existentes</div>
-                    <strong style={{ fontSize: '1.1rem', color: '#1d4ed8' }}>{importPreview.summary.existingToEnroll}</strong>
+                )}
+
+                {/* Lista de Resultados de Búsqueda */}
+                {searchSubmitted && !searchLoading && searchResults.length === 0 && (
+                  <p style={{ fontSize: '0.875rem', color: 'var(--color-muted)', fontStyle: 'italic', margin: '16px 0' }}>
+                    No se encontraron alumnos registrados con el criterio especificado.
+                  </p>
+                )}
+
+                {searchResults.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '280px', overflowY: 'auto', marginBottom: '16px' }}>
+                    {searchResults.map((stu) => (
+                      <div
+                        key={stu.id}
+                        style={{
+                          padding: '12px',
+                          border: '1px solid var(--color-border)',
+                          borderRadius: '6px',
+                          backgroundColor: 'var(--color-surface, #ffffff)',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: '12px',
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: '0.925rem', color: 'var(--color-text)' }}>
+                            {stu.name}
+                          </div>
+                          <div style={{ fontSize: '0.8rem', color: 'var(--color-muted)' }}>
+                            Matrícula: {stu.studentNumber || 'N/A'} • {stu.email}
+                          </div>
+                        </div>
+
+                        {stu.isAlreadyEnrolled ? (
+                          <span className="role-pill student" style={{ backgroundColor: '#f3f4f6', color: '#6b7280', fontSize: '0.75rem', padding: '4px 8px' }}>
+                            ✓ Ya inscrito
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn-primary"
+                            style={{ width: 'auto', padding: '4px 12px', fontSize: '0.825rem' }}
+                            onClick={() => handleAddExistingStudent(stu)}
+                            disabled={enrollingStudentId === stu.id}
+                          >
+                            {enrollingStudentId === stu.id ? 'Agregando...' : 'Agregar al curso'}
+                          </button>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                  <div style={{ padding: '8px', backgroundColor: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '6px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#475569' }}>Ya inscritos</div>
-                    <strong style={{ fontSize: '1.1rem', color: '#475569' }}>{importPreview.summary.alreadyEnrolled}</strong>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      setIsAddStudentModalOpen(false);
+                      setIsManualModalOpen(false);
+                      setIsImportModalOpen(false);
+                    }}
+                  >
+                    Cerrar
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 3: REGISTER (REGISTRAR ALUMNO NUEVO) */}
+            {addStudentTab === 'REGISTER' && (
+              <form onSubmit={handleManualSubmit}>
+                {manualError && (
+                  <div className="alert alert-danger" style={{ marginBottom: '16px' }}>
+                    {manualError}
                   </div>
-                  <div style={{ padding: '8px', backgroundColor: '#fffbeb', border: '1px solid #fde68a', borderRadius: '6px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#b45309' }}>Conflictos</div>
-                    <strong style={{ fontSize: '1.1rem', color: '#b45309' }}>{importPreview.summary.conflicts}</strong>
-                  </div>
-                  <div style={{ padding: '8px', backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '6px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#b91c1c' }}>Inválidos</div>
-                    <strong style={{ fontSize: '1.1rem', color: '#b91c1c' }}>{importPreview.summary.invalid}</strong>
-                  </div>
+                )}
+
+                <div className="form-group">
+                  <label className="form-label" htmlFor="manual-student-name">
+                    Nombre completo
+                  </label>
+                  <input
+                    id="manual-student-name"
+                    type="text"
+                    className="form-input"
+                    placeholder="Ej: Juan Pérez López"
+                    value={manualName}
+                    onChange={(e) => setManualName(e.target.value)}
+                    disabled={manualSubmitting}
+                    required
+                  />
                 </div>
 
-                {/* Tabla de Filas */}
-                <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: '6px', marginBottom: '20px' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.825rem', textAlign: 'left' }}>
-                    <thead>
-                      <tr style={{ backgroundColor: 'var(--color-background)', borderBottom: '1px solid var(--color-border)' }}>
-                        <th style={{ padding: '6px 8px' }}>Fila</th>
-                        <th style={{ padding: '6px 8px' }}>Nombre</th>
-                        <th style={{ padding: '6px 8px' }}>Matrícula</th>
-                        <th style={{ padding: '6px 8px' }}>Correo</th>
-                        <th style={{ padding: '6px 8px' }}>Estado</th>
-                        <th style={{ padding: '6px 8px' }}>Detalle</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {importPreview.rows.map((r) => (
-                        <tr key={r.rowNumber} style={{ borderBottom: '1px solid var(--color-border)' }}>
-                          <td style={{ padding: '6px 8px' }}>{r.rowNumber}</td>
-                          <td style={{ padding: '6px 8px', fontWeight: 600 }}>{r.name || '—'}</td>
-                          <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{r.studentNumber || '—'}</td>
-                          <td style={{ padding: '6px 8px' }}>{r.email || '—'}</td>
-                          <td style={{ padding: '6px 8px' }}>{getRowStatusPill(r.status)}</td>
-                          <td style={{ padding: '6px 8px', color: 'var(--color-muted)', fontSize: '0.775rem' }}>{r.message}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="manual-student-number">
+                    Matrícula
+                  </label>
+                  <input
+                    id="manual-student-number"
+                    type="text"
+                    className="form-input"
+                    placeholder="Ej: 00012345"
+                    value={manualStudentNumber}
+                    onChange={(e) => setManualStudentNumber(e.target.value)}
+                    disabled={manualSubmitting}
+                    required
+                  />
                 </div>
 
-                <div style={{ display: 'flex', gap: '12px' }}>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="manual-student-email">
+                    Correo electrónico
+                  </label>
+                  <input
+                    id="manual-student-email"
+                    type="email"
+                    className="form-input"
+                    placeholder="alumno@ejemplo.com"
+                    value={manualEmail}
+                    onChange={(e) => setManualEmail(e.target.value)}
+                    disabled={manualSubmitting}
+                    required
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
                   <button
                     type="button"
                     className="btn-secondary"
                     style={{ flex: 1 }}
                     onClick={() => {
-                      setImportPreview(null);
-                      setImportFile(null);
+                      setIsAddStudentModalOpen(false);
+                      setIsManualModalOpen(false);
+                      setIsImportModalOpen(false);
                     }}
-                    disabled={importLoading}
+                    disabled={manualSubmitting}
                   >
-                    Seleccionar otro archivo
+                    Cancelar
                   </button>
                   <button
-                    type="button"
+                    type="submit"
                     className="btn-primary"
                     style={{ flex: 1 }}
-                    onClick={handleConfirmImport}
-                    disabled={importLoading || (importPreview.summary.new === 0 && importPreview.summary.existingToEnroll === 0)}
+                    disabled={manualSubmitting}
                   >
-                    {importLoading ? 'Importando alumnos...' : 'Confirmar importación'}
+                    {manualSubmitting ? 'Inscribiendo...' : 'Inscribir alumno'}
                   </button>
                 </div>
-              </div>
+              </form>
             )}
 
-            {/* Paso 3: Resultado de la Confirmación */}
-            {importConfirmResult && (
+            {/* TAB 4: EXCEL (IMPORTAR DESDE EXCEL) */}
+            {addStudentTab === 'EXCEL' && (
               <div>
-                <div className="alert alert-success" style={{ marginBottom: '16px' }}>
-                  Importación masiva completada. Procesados: {importConfirmResult.totalProcessed} | Creados: {importConfirmResult.createdCount} | Inscritos: {importConfirmResult.enrolledExistingCount} | Omitidos: {importConfirmResult.skippedCount}
-                </div>
+                <p className="page-description" style={{ marginBottom: '16px', fontSize: '0.875rem' }}>
+                  El archivo debe incluir las columnas encabezado: <strong>nombre</strong>, <strong>matrícula</strong> y <strong>correo</strong>.
+                </p>
 
-                <div style={{ maxHeight: '250px', overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: '6px', marginBottom: '20px' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.825rem', textAlign: 'left' }}>
-                    <thead>
-                      <tr style={{ backgroundColor: 'var(--color-background)', borderBottom: '1px solid var(--color-border)' }}>
-                        <th style={{ padding: '6px 8px' }}>Matrícula</th>
-                        <th style={{ padding: '6px 8px' }}>Nombre</th>
-                        <th style={{ padding: '6px 8px' }}>Correo</th>
-                        <th style={{ padding: '6px 8px' }}>Resultado</th>
-                        <th style={{ padding: '6px 8px' }}>Correo Enviado</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {importConfirmResult.results.map((res, i) => (
-                        <tr key={i} style={{ borderBottom: '1px solid var(--color-border)' }}>
-                          <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{res.studentNumber}</td>
-                          <td style={{ padding: '6px 8px' }}>{res.name}</td>
-                          <td style={{ padding: '6px 8px' }}>{res.email}</td>
-                          <td style={{ padding: '6px 8px' }}>{res.status}</td>
-                          <td style={{ padding: '6px 8px' }}>{res.emailSent ? 'Sí 🟢' : 'No 🔴'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                {importError && (
+                  <div className="alert alert-danger" style={{ marginBottom: '16px' }}>
+                    {importError}
+                  </div>
+                )}
 
-                <button
-                  type="button"
-                  className="btn-primary"
-                  style={{ width: '100%' }}
-                  onClick={() => setIsImportModalOpen(false)}
-                >
-                  Cerrar y ver lista de alumnos
-                </button>
+                {/* Paso 1: Selección de archivo */}
+                {!importPreview && !importConfirmResult && (
+                  <div>
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="excel-file-input">
+                        Seleccionar archivo Excel
+                      </label>
+                      <input
+                        id="excel-file-input"
+                        type="file"
+                        accept=".xlsx"
+                        className="form-input"
+                        onChange={handleImportFileChange}
+                        disabled={importLoading}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ flex: 1 }}
+                        onClick={() => {
+                          setIsAddStudentModalOpen(false);
+                          setIsManualModalOpen(false);
+                          setIsImportModalOpen(false);
+                        }}
+                        disabled={importLoading}
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        style={{ flex: 1 }}
+                        onClick={handlePreviewImport}
+                        disabled={!importFile || importLoading}
+                      >
+                        {importLoading ? 'Analizando archivo...' : 'Previsualizar'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Paso 2: Previsualización de filas */}
+                {importPreview && !importConfirmResult && (
+                  <div>
+                    {/* Resumen de Clasificación */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: '8px', marginBottom: '16px' }}>
+                      <div style={{ padding: '8px', backgroundColor: 'var(--color-background)', border: '1px solid var(--color-border)', borderRadius: '6px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--color-muted)' }}>Total</div>
+                        <strong style={{ fontSize: '1.1rem' }}>{importPreview.summary.total}</strong>
+                      </div>
+                      <div style={{ padding: '8px', backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '6px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '0.75rem', color: '#047857' }}>Nuevos</div>
+                        <strong style={{ fontSize: '1.1rem', color: '#047857' }}>{importPreview.summary.new}</strong>
+                      </div>
+                      <div style={{ padding: '8px', backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '0.75rem', color: '#1d4ed8' }}>Existentes</div>
+                        <strong style={{ fontSize: '1.1rem', color: '#1d4ed8' }}>{importPreview.summary.existingToEnroll}</strong>
+                      </div>
+                      <div style={{ padding: '8px', backgroundColor: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '6px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '0.75rem', color: '#475569' }}>Ya inscritos</div>
+                        <strong style={{ fontSize: '1.1rem', color: '#475569' }}>{importPreview.summary.alreadyEnrolled}</strong>
+                      </div>
+                      <div style={{ padding: '8px', backgroundColor: '#fffbeb', border: '1px solid #fde68a', borderRadius: '6px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '0.75rem', color: '#b45309' }}>Conflictos</div>
+                        <strong style={{ fontSize: '1.1rem', color: '#b45309' }}>{importPreview.summary.conflicts}</strong>
+                      </div>
+                      <div style={{ padding: '8px', backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '6px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '0.75rem', color: '#b91c1c' }}>Inválidos</div>
+                        <strong style={{ fontSize: '1.1rem', color: '#b91c1c' }}>{importPreview.summary.invalid}</strong>
+                      </div>
+                    </div>
+
+                    {/* Tabla de Filas */}
+                    <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: '6px', marginBottom: '20px' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.825rem', textAlign: 'left' }}>
+                        <thead>
+                          <tr style={{ backgroundColor: 'var(--color-background)', borderBottom: '1px solid var(--color-border)' }}>
+                            <th style={{ padding: '6px 8px' }}>Fila</th>
+                            <th style={{ padding: '6px 8px' }}>Nombre</th>
+                            <th style={{ padding: '6px 8px' }}>Matrícula</th>
+                            <th style={{ padding: '6px 8px' }}>Correo</th>
+                            <th style={{ padding: '6px 8px' }}>Estado</th>
+                            <th style={{ padding: '6px 8px' }}>Detalle</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {importPreview.rows.map((r) => (
+                            <tr key={r.rowNumber} style={{ borderBottom: '1px solid var(--color-border)' }}>
+                              <td style={{ padding: '6px 8px' }}>{r.rowNumber}</td>
+                              <td style={{ padding: '6px 8px', fontWeight: 600 }}>{r.name || '—'}</td>
+                              <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{r.studentNumber || '—'}</td>
+                              <td style={{ padding: '6px 8px' }}>{r.email || '—'}</td>
+                              <td style={{ padding: '6px 8px' }}>{getRowStatusPill(r.status)}</td>
+                              <td style={{ padding: '6px 8px', color: 'var(--color-muted)', fontSize: '0.775rem' }}>{r.message}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '12px' }}>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ flex: 1 }}
+                        onClick={() => {
+                          setImportPreview(null);
+                          setImportFile(null);
+                        }}
+                        disabled={importLoading}
+                      >
+                        Seleccionar otro archivo
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        style={{ flex: 1 }}
+                        onClick={handleConfirmImport}
+                        disabled={importLoading || (importPreview.summary.new === 0 && importPreview.summary.existingToEnroll === 0)}
+                      >
+                        {importLoading ? 'Importando alumnos...' : 'Confirmar importación'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Paso 3: Resultado de la Confirmación */}
+                {importConfirmResult && (
+                  <div>
+                    <div className="alert alert-success" style={{ marginBottom: '16px' }}>
+                      Importación masiva completada. Procesados: {importConfirmResult.totalProcessed} | Creados: {importConfirmResult.createdCount} | Inscritos: {importConfirmResult.enrolledExistingCount} | Omitidos: {importConfirmResult.skippedCount}
+                    </div>
+
+                    <div style={{ maxHeight: '250px', overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: '6px', marginBottom: '20px' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.825rem', textAlign: 'left' }}>
+                        <thead>
+                          <tr style={{ backgroundColor: 'var(--color-background)', borderBottom: '1px solid var(--color-border)' }}>
+                            <th style={{ padding: '6px 8px' }}>Matrícula</th>
+                            <th style={{ padding: '6px 8px' }}>Nombre</th>
+                            <th style={{ padding: '6px 8px' }}>Correo</th>
+                            <th style={{ padding: '6px 8px' }}>Resultado</th>
+                            <th style={{ padding: '6px 8px' }}>Correo Enviado</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {importConfirmResult.results.map((res, i) => (
+                            <tr key={i} style={{ borderBottom: '1px solid var(--color-border)' }}>
+                              <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{res.studentNumber}</td>
+                              <td style={{ padding: '6px 8px' }}>{res.name}</td>
+                              <td style={{ padding: '6px 8px' }}>{res.email}</td>
+                              <td style={{ padding: '6px 8px' }}>{res.status}</td>
+                              <td style={{ padding: '6px 8px' }}>{res.emailSent ? 'Sí 🟢' : 'No 🔴'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      style={{ width: '100%' }}
+                      onClick={() => {
+                        setIsAddStudentModalOpen(false);
+                        setIsManualModalOpen(false);
+                        setIsImportModalOpen(false);
+                      }}
+                    >
+                      Cerrar y ver lista de alumnos
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>

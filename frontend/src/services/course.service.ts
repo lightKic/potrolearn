@@ -74,7 +74,18 @@ export const CourseServiceAPI = {
   },
 
   getAvailableTeachers: async (): Promise<AdminTeacher[]> => {
-    return apiFetch<AdminTeacher[]>('/admin/teachers', { method: 'GET' });
+    const res = await apiFetch<{ teachers: AdminTeacher[] }>('/admin/teachers', { method: 'GET' });
+    return res.teachers ?? [];
+  },
+
+  searchStudents: async (
+    courseId: string,
+    query: string,
+  ): Promise<{ id: string; name: string; email: string; studentNumber: string; isAlreadyEnrolled: boolean }[]> => {
+    return apiFetch<{ id: string; name: string; email: string; studentNumber: string; isAlreadyEnrolled: boolean }[]>(
+      `/courses/${courseId}/search-students?query=${encodeURIComponent(query)}`,
+      { method: 'GET' },
+    );
   },
 
   getCourseStudents: async (courseId: string): Promise<CourseStudent[]> => {

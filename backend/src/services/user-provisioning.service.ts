@@ -251,6 +251,19 @@ export class UserProvisioningService {
           },
         });
 
+        // Enviar correo informativo al estudiante existente posterior al commit DB
+        let emailSent = false;
+        try {
+          emailSent = await emailService.sendCourseEnrollmentNotification({
+            recipientEmail: studentUser.email,
+            recipientName: studentUser.name,
+            courseName: course.name,
+          });
+        } catch (emailErr) {
+          console.error('[EMAIL ERROR] Falló el envío del correo al estudiante existente:', emailErr);
+          emailSent = false;
+        }
+
         return {
           student: {
             id: studentUser.id,
@@ -265,6 +278,7 @@ export class UserProvisioningService {
             status: enrollment.status,
           },
           isNewStudent: false,
+          emailSent,
         };
       } catch (error: any) {
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -454,6 +468,56 @@ export class UserProvisioningService {
         enrolledAt: e.enrolledAt,
       };
     });
+  }
+
+  /**
+   * Busca estudiantes registrados en la plataforma para asociar a un curso (por nombre, matrícula o correo).
+   */
+  public static async searchStudentsForCourse(courseId: string, query: string): Promise<{
+    id: string;
+    name: string;
+    email: string;
+    studentNumber: string;
+    isAlreadyEnrolled: boolean;
+  }[]> {
+    const q = query?.trim();
+    if (!q || q.length === 0) {
+      return [];
+    }
+
+    const students = await prisma.user.findMany({
+      where: {
+        role: Role.STUDENT,
+        OR: [
+          { name: { contains: q, mode: 'insensitive' } },
+          { email: { contains: q, mode: 'insensitive' } },
+          { studentProfile: { studentNumber: { contains: q, mode: 'insensitive' } } },
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        studentProfile: {
+          select: {
+            studentNumber: true,
+          },
+        },
+        enrollments: {
+          where: { courseId },
+          select: { id: true },
+        },
+      },
+      take: 20,
+    });
+
+    return students.map((s) => ({
+      id: s.id,
+      name: s.name,
+      email: s.email,
+      studentNumber: s.studentProfile?.studentNumber || '',
+      isAlreadyEnrolled: s.enrollments.length > 0,
+    }));
   }
 
   /**
@@ -816,7 +880,7 @@ export class UserProvisioningService {
             email,
             name,
             status: 'ENROLLED',
-            emailSent: true,
+            emailSent: enrollResult.emailSent ?? false,
             message: 'Alumno existente inscrito al curso.',
           });
         }

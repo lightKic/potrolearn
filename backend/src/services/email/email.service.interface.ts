@@ -13,8 +13,15 @@ export interface PasswordResetEmailInput {
   temporaryPassword: string;
 }
 
+export interface CourseEnrollmentEmailInput {
+  recipientEmail: string;
+  recipientName: string;
+  courseName: string;
+}
+
 export interface IEmailService {
   sendAccountInvitation(input: AccountInvitationEmailInput): Promise<boolean>;
   sendPasswordReset(input: PasswordResetEmailInput): Promise<boolean>;
+  sendCourseEnrollmentNotification(input: CourseEnrollmentEmailInput): Promise<boolean>;
   verifyConnection(): Promise<boolean>;
 }
