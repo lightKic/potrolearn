@@ -210,6 +210,7 @@ export interface AttemptDTO {
   score?: number | null;
   isPassed?: boolean | null;
   answers?: AttemptAnswerDTO[];
+  assessment?: StudentAssessmentDTO | AssessmentDTO;
 }
 
 export interface GradeAnswerInput {

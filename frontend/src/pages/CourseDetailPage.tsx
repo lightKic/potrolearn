@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Course, CourseStatus, CourseStudent, ImportPreviewResult, BulkConfirmResult, Module, Lesson, CourseContent } from '../types/academic.js';
 import { CourseServiceAPI, AdminTeacher } from '../services/course.service.js';
 import { AssessmentServiceAPI } from '../services/assessment.service.js';
-import { StudentAssessmentDTO } from '../types/assessment.js';
+import { StudentAssessmentDTO, AssessmentType } from '../types/assessment.js';
 import { useAuth } from '../auth/useAuth.js';
 import { ApiError } from '../services/api.js';
 import { MarkdownContent } from '../components/MarkdownContent.js';
@@ -87,6 +87,22 @@ export const CourseDetailPage: React.FC = () => {
   // Modal de confirmación para Restablecer Acceso
   const [resetAccessStudent, setResetAccessStudent] = useState<CourseStudent | null>(null);
   const [resendingStudentId, setResendingStudentId] = useState<string | null>(null);
+
+  // Estados para creación de Evaluaciones (QA-005)
+  const [isCreateAssModalOpen, setIsCreateAssModalOpen] = useState(false);
+  const [createAssTitle, setCreateAssTitle] = useState('');
+  const [createAssDescription, setCreateAssDescription] = useState('');
+  const [createAssType, setCreateAssType] = useState<AssessmentType>('EXAM');
+  const [createAssWeight, setCreateAssWeight] = useState('0');
+  const [createAssPassingScore, setCreateAssPassingScore] = useState('');
+  const [createAssTimeLimit, setCreateAssTimeLimit] = useState('');
+  const [createAssMaxAttempts, setCreateAssMaxAttempts] = useState('');
+  const [createAssAvailableFrom, setCreateAssAvailableFrom] = useState('');
+  const [createAssAvailableUntil, setCreateAssAvailableUntil] = useState('');
+  const [createAssUnlimitedAttempts, setCreateAssUnlimitedAttempts] = useState(true);
+  const [createAssUnlimitedTime, setCreateAssUnlimitedTime] = useState(true);
+  const [createAssSubmitting, setCreateAssSubmitting] = useState(false);
+  const [createAssError, setCreateAssError] = useState<string | null>(null);
 
   const fetchCourseContentData = React.useCallback(async () => {
     if (!courseId) return;
@@ -561,6 +577,102 @@ export const CourseDetailPage: React.FC = () => {
       }
     } finally {
       setManualSubmitting(false);
+    }
+  };
+
+  const handleCreateAssessmentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!courseId) return;
+
+    const title = createAssTitle.trim();
+    if (!title) {
+      setCreateAssError('El título de la evaluación es obligatorio');
+      return;
+    }
+
+    const weightNum = Number(createAssWeight);
+    if (isNaN(weightNum) || weightNum < 0 || weightNum > 100) {
+      setCreateAssError('La ponderación debe ser un valor entre 0 y 100%');
+      return;
+    }
+
+    const passingScoreNum = createAssPassingScore.trim() !== '' ? Number(createAssPassingScore) : null;
+    if (passingScoreNum !== null && (isNaN(passingScoreNum) || passingScoreNum < 0 || passingScoreNum > 100)) {
+      setCreateAssError('La calificación aprobatoria debe estar entre 0 y 100%');
+      return;
+    }
+
+    const timeLimitNum = createAssUnlimitedTime ? null : (createAssTimeLimit.trim() !== '' ? Number(createAssTimeLimit) : null);
+    if (!createAssUnlimitedTime && (timeLimitNum === null || isNaN(timeLimitNum) || timeLimitNum < 1)) {
+      setCreateAssError('Especifica un tiempo límite válido en minutos (mínimo 1 minuto)');
+      return;
+    }
+
+    const maxAttemptsNum = createAssUnlimitedAttempts ? null : (createAssMaxAttempts.trim() !== '' ? Number(createAssMaxAttempts) : null);
+    if (!createAssUnlimitedAttempts && (maxAttemptsNum === null || isNaN(maxAttemptsNum) || maxAttemptsNum < 1)) {
+      setCreateAssError('Especifica un número máximo de intentos válido (mínimo 1 intento)');
+      return;
+    }
+
+    const fromDateObj = createAssAvailableFrom ? new Date(createAssAvailableFrom) : null;
+    const untilDateObj = createAssAvailableUntil ? new Date(createAssAvailableUntil) : null;
+
+    if (fromDateObj && isNaN(fromDateObj.getTime())) {
+      setCreateAssError('La fecha de apertura proporcionada no es válida');
+      return;
+    }
+    if (untilDateObj && isNaN(untilDateObj.getTime())) {
+      setCreateAssError('La fecha de cierre proporcionada no es válida');
+      return;
+    }
+    if (fromDateObj && untilDateObj && fromDateObj > untilDateObj) {
+      setCreateAssError('La fecha de apertura no puede ser posterior a la fecha de cierre');
+      return;
+    }
+
+    setCreateAssSubmitting(true);
+    setCreateAssError(null);
+
+    try {
+      await AssessmentServiceAPI.createAssessment(courseId, {
+        title,
+        description: createAssDescription.trim() || null,
+        type: createAssType,
+        weight: weightNum,
+        passingScore: passingScoreNum,
+        timeLimitMinutes: timeLimitNum,
+        maxAttempts: maxAttemptsNum,
+        availableFrom: fromDateObj ? fromDateObj.toISOString() : null,
+        availableUntil: untilDateObj ? untilDateObj.toISOString() : null,
+      });
+
+      setIsCreateAssModalOpen(false);
+      setCreateAssTitle('');
+      setCreateAssDescription('');
+      setCreateAssType('EXAM');
+      setCreateAssWeight('0');
+      setCreateAssPassingScore('');
+      setCreateAssTimeLimit('');
+      setCreateAssMaxAttempts('');
+      setCreateAssAvailableFrom('');
+      setCreateAssAvailableUntil('');
+      setCreateAssUnlimitedAttempts(true);
+      setCreateAssUnlimitedTime(true);
+      setActionError(null);
+      setActionSuccess('Evaluación creada exitosamente.');
+
+      setAssessmentsLoading(true);
+      const assessmentsData = await AssessmentServiceAPI.getCourseAssessments(courseId);
+      setAssessments(assessmentsData);
+      setAssessmentsLoading(false);
+    } catch (err: unknown) {
+      if (err instanceof ApiError) {
+        setCreateAssError(err.message);
+      } else {
+        setCreateAssError('Error al crear la evaluación');
+      }
+    } finally {
+      setCreateAssSubmitting(false);
     }
   };
 
@@ -1348,9 +1460,24 @@ export const CourseDetailPage: React.FC = () => {
 
       {/* Sección Real de Evaluaciones del Curso (Fase 8.4-F) */}
       <div className="dashboard-card" style={{ marginBottom: '24px' }}>
-        <h3 className="dashboard-card-title" id="assessments-section-title" style={{ marginBottom: '16px' }}>
-          Evaluaciones del Curso ({assessments.length})
-        </h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+          <h3 className="dashboard-card-title" id="assessments-section-title" style={{ margin: 0 }}>
+            Evaluaciones del Curso ({assessments.length})
+          </h3>
+          {(user?.role === 'ADMIN' || (user?.role === 'TEACHER' && isTeacherAssigned)) && !isEnrollmentBlocked && (
+            <button
+              type="button"
+              className="btn-primary"
+              style={{ width: 'auto', padding: '6px 14px', fontSize: '0.875rem' }}
+              onClick={() => {
+                setCreateAssError(null);
+                setIsCreateAssModalOpen(true);
+              }}
+            >
+              + Nueva Evaluación
+            </button>
+          )}
+        </div>
         {assessmentsLoading ? (
           <p className="loading-text">Cargando evaluaciones...</p>
         ) : assessments.length === 0 ? (
@@ -1378,6 +1505,19 @@ export const CourseDetailPage: React.FC = () => {
                     <span className={`role-pill ${ass.type === 'EXAM' ? 'admin' : 'student'}`} style={{ fontSize: '0.75rem' }}>
                       {ass.type === 'EXAM' ? 'Examen' : 'Cuestionario'}
                     </span>
+                    {user?.role !== 'STUDENT' && (
+                      <span
+                        className="role-pill"
+                        style={{
+                          fontSize: '0.75rem',
+                          backgroundColor: ass.isPublished ? '#ecfdf5' : '#fffbeb',
+                          color: ass.isPublished ? '#047857' : '#b45309',
+                          border: `1px solid ${ass.isPublished ? '#a7f3d0' : '#fde68a'}`,
+                        }}
+                      >
+                        {ass.isPublished ? 'Publicada 🟢' : 'Borrador 🟡'}
+                      </span>
+                    )}
                   </div>
                   {ass.description && (
                     <div style={{ fontSize: '0.85rem', color: 'var(--color-muted)', marginTop: '4px' }}>
@@ -2282,6 +2422,280 @@ export const CourseDetailPage: React.FC = () => {
                   disabled={lessonSubmitting}
                 >
                   {lessonSubmitting ? 'Guardando...' : 'Guardar lección'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal para Crear Nueva Evaluación (QA-005) */}
+      {isCreateAssModalOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            padding: '16px',
+          }}
+        >
+          <div
+            className="dashboard-card"
+            style={{
+              width: '100%',
+              maxWidth: '620px',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              backgroundColor: 'var(--color-surface, #ffffff)',
+              borderRadius: '12px',
+              padding: '28px',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+            }}
+          >
+            <h3 style={{ marginBottom: '20px', fontSize: '1.25rem', fontWeight: 700, borderBottom: '1px solid #e5e7eb', paddingBottom: '12px' }}>
+              ✨ Nueva Evaluación
+            </h3>
+
+            {createAssError && (
+              <div className="alert alert-error" style={{ marginBottom: '20px' }}>
+                {createAssError}
+              </div>
+            )}
+
+            <form onSubmit={handleCreateAssessmentSubmit}>
+              {/* Sección 1: Información General */}
+              <div style={{ marginBottom: '22px', backgroundColor: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#334155', marginBottom: '14px' }}>
+                  📝 Información General
+                </h4>
+
+                <div style={{ marginBottom: '14px' }}>
+                  <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.875rem' }}>
+                    Título de la Evaluación *
+                  </label>
+                  <input
+                    type="text"
+                    className="input-field"
+                    placeholder="ej. Examen Parcial I - Unidad 1"
+                    value={createAssTitle}
+                    onChange={(e) => setCreateAssTitle(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <div style={{ marginBottom: '14px' }}>
+                  <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.875rem' }}>
+                    Descripción / Instrucciones
+                  </label>
+                  <textarea
+                    className="input-field"
+                    rows={3}
+                    placeholder="Instrucciones para los estudiantes antes de comenzar..."
+                    value={createAssDescription}
+                    onChange={(e) => setCreateAssDescription(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.875rem' }}>
+                    Tipo de Evaluación *
+                  </label>
+                  <select
+                    className="input-field"
+                    value={createAssType}
+                    onChange={(e) => setCreateAssType(e.target.value as AssessmentType)}
+                  >
+                    <option value="EXAM">Examen 📝</option>
+                    <option value="QUIZ">Cuestionario ❓</option>
+                    <option value="DIAGNOSTIC">Diagnóstico 🔍</option>
+                    <option value="PRACTICE">Práctica 🏋️</option>
+                    <option value="FINAL">Evaluación Final 🎓</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Sección 2: Calificación y Ponderación */}
+              <div style={{ marginBottom: '22px', backgroundColor: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#334155', marginBottom: '14px' }}>
+                  📊 Calificación y Ponderación
+                </h4>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '4px', fontSize: '0.875rem' }}>
+                      Ponderación (%) *
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      className="input-field"
+                      value={createAssWeight}
+                      onChange={(e) => setCreateAssWeight(e.target.value)}
+                      required
+                    />
+                    <small style={{ color: '#64748b', fontSize: '0.75rem', display: 'block', marginTop: '4px' }}>
+                      Porcentaje de la calificación final que representa.
+                    </small>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '4px', fontSize: '0.875rem' }}>
+                      Calificación Aprobatoria (%)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      placeholder="ej. 60"
+                      className="input-field"
+                      value={createAssPassingScore}
+                      onChange={(e) => setCreateAssPassingScore(e.target.value)}
+                    />
+                    <small style={{ color: '#64748b', fontSize: '0.75rem', display: 'block', marginTop: '4px' }}>
+                      Porcentaje mínimo para aprobar (opcional).
+                    </small>
+                  </div>
+                </div>
+              </div>
+
+              {/* Sección 3: Tiempo e Intentos */}
+              <div style={{ marginBottom: '22px', backgroundColor: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#334155', marginBottom: '14px' }}>
+                  ⏱️ Tiempo e Intentos
+                </h4>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.875rem' }}>
+                      Tiempo Límite (minutos)
+                    </label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                      <input
+                        type="checkbox"
+                        id="createAssUnlimitedTime"
+                        checked={createAssUnlimitedTime}
+                        onChange={(e) => setCreateAssUnlimitedTime(e.target.checked)}
+                      />
+                      <label htmlFor="createAssUnlimitedTime" style={{ fontSize: '0.85rem', cursor: 'pointer' }}>
+                        Sin límite de tiempo
+                      </label>
+                    </div>
+                    {!createAssUnlimitedTime && (
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="Minutos"
+                        className="input-field"
+                        value={createAssTimeLimit}
+                        onChange={(e) => setCreateAssTimeLimit(e.target.value)}
+                      />
+                    )}
+                    <small style={{ color: '#64748b', fontSize: '0.75rem', display: 'block', marginTop: '4px' }}>
+                      {createAssUnlimitedTime ? 'El estudiante dispone de tiempo ilimitado para responder.' : 'Se enviará automáticamente al terminar el tiempo.'}
+                    </small>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.875rem' }}>
+                      Intentos Máximos
+                    </label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                      <input
+                        type="checkbox"
+                        id="createAssUnlimitedAttempts"
+                        checked={createAssUnlimitedAttempts}
+                        onChange={(e) => setCreateAssUnlimitedAttempts(e.target.checked)}
+                      />
+                      <label htmlFor="createAssUnlimitedAttempts" style={{ fontSize: '0.85rem', cursor: 'pointer' }}>
+                        Intentos ilimitados
+                      </label>
+                    </div>
+                    {!createAssUnlimitedAttempts && (
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="Cantidad de intentos"
+                        className="input-field"
+                        value={createAssMaxAttempts}
+                        onChange={(e) => setCreateAssMaxAttempts(e.target.value)}
+                      />
+                    )}
+                    <small style={{ color: '#64748b', fontSize: '0.75rem', display: 'block', marginTop: '4px' }}>
+                      {createAssUnlimitedAttempts ? 'El estudiante podrá realizar intentos sin límite.' : 'Límite máximo de intentos permitidos.'}
+                    </small>
+                  </div>
+                </div>
+              </div>
+
+              {/* Sección 4: Disponibilidad */}
+              <div style={{ marginBottom: '24px', backgroundColor: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#334155', marginBottom: '14px' }}>
+                  📅 Disponibilidad (Ventana de Fechas)
+                </h4>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.85rem' }}>
+                      Disponible Desde
+                    </label>
+                    <input
+                      type="datetime-local"
+                      className="input-field"
+                      value={createAssAvailableFrom}
+                      onChange={(e) => setCreateAssAvailableFrom(e.target.value)}
+                    />
+                    <small style={{ color: '#64748b', fontSize: '0.75rem', display: 'block', marginTop: '4px' }}>
+                      Apertura para iniciar nuevos intentos.
+                    </small>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.85rem' }}>
+                      Disponible Hasta
+                    </label>
+                    <input
+                      type="datetime-local"
+                      className="input-field"
+                      value={createAssAvailableUntil}
+                      onChange={(e) => setCreateAssAvailableUntil(e.target.value)}
+                    />
+                    <small style={{ color: '#64748b', fontSize: '0.75rem', display: 'block', marginTop: '4px' }}>
+                      Cierre para iniciar nuevos intentos.
+                    </small>
+                  </div>
+                </div>
+
+                {!createAssAvailableFrom && !createAssAvailableUntil && (
+                  <div style={{ marginTop: '10px', fontSize: '0.8rem', color: '#0369a1', backgroundColor: '#e0f2fe', padding: '6px 12px', borderRadius: '6px' }}>
+                    ℹ️ Disponible sin ventana de fechas.
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', paddingTop: '12px', borderTop: '1px solid #e5e7eb' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setIsCreateAssModalOpen(false)}
+                  disabled={createAssSubmitting}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={createAssSubmitting}
+                >
+                  {createAssSubmitting ? 'Creando...' : 'Crear Evaluación'}
                 </button>
               </div>
             </form>

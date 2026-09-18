@@ -3,6 +3,7 @@ import { Role, CourseStatus, EnrollmentStatus, QuestionType, AttemptStatus, Pris
 import { prisma } from '../lib/prisma';
 import { AuthError } from '../types/auth.types';
 import { GradebookService } from './gradebook.service';
+import { AssessmentService } from './assessment.service';
 import {
   AttemptDTO,
   SaveAnswerInput,
@@ -73,6 +74,22 @@ export class AttemptService {
           status: 'IN_PROGRESS',
         },
         include: {
+          assessment: {
+            include: {
+              assessmentQuestions: {
+                orderBy: { order: 'asc' },
+                include: {
+                  question: {
+                    include: {
+                      options: {
+                        orderBy: { order: 'asc' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
           answers: {
             include: {
               answerOptions: true,
@@ -82,7 +99,7 @@ export class AttemptService {
       });
 
       if (activeAttempt) {
-        return this.mapToDTO(activeAttempt);
+        return this.mapToDTO(activeAttempt, Role.STUDENT);
       }
 
       // 3. Locate assessment and course to validate rules
@@ -172,9 +189,32 @@ export class AttemptService {
           score: null,
           submittedAt: null,
         },
+        include: {
+          assessment: {
+            include: {
+              assessmentQuestions: {
+                orderBy: { order: 'asc' },
+                include: {
+                  question: {
+                    include: {
+                      options: {
+                        orderBy: { order: 'asc' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          answers: {
+            include: {
+              answerOptions: true,
+            },
+          },
+        },
       });
 
-      return this.mapToDTO(newAttempt);
+      return this.mapToDTO(newAttempt, Role.STUDENT);
     }, { timeout: 20000, maxWait: 10000 });
   }
 
@@ -192,6 +232,18 @@ export class AttemptService {
         assessment: {
           include: {
             course: true,
+            assessmentQuestions: {
+              orderBy: { order: 'asc' },
+              include: {
+                question: {
+                  include: {
+                    options: {
+                      orderBy: { order: 'asc' },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
         answers: {
@@ -226,7 +278,7 @@ export class AttemptService {
     }
     // ADMIN has global access
 
-    return this.mapToDTO(attempt);
+    return this.mapToDTO(attempt, userRole);
   }
 
   /**
@@ -916,7 +968,7 @@ export class AttemptService {
   /**
    * Maps an Attempt model to a sanitized AttemptDTO.
    */
-  public static mapToDTO(attempt: any): AttemptDTO {
+  public static mapToDTO(attempt: any, userRole?: Role): AttemptDTO {
     const rawScore = attempt.score;
     const scoreNum = attempt.status === 'IN_PROGRESS' || rawScore === null || rawScore === undefined
       ? null
@@ -954,6 +1006,15 @@ export class AttemptService {
       };
     }) : undefined;
 
+    let mappedAssessment = undefined;
+    if (attempt.assessment) {
+      if (userRole === Role.STUDENT || !userRole) {
+        mappedAssessment = AssessmentService.mapToStudentDTO(attempt.assessment);
+      } else {
+        mappedAssessment = AssessmentService.mapToDTO(attempt.assessment);
+      }
+    }
+
     return {
       id: attempt.id,
       studentId: attempt.studentId,
@@ -965,6 +1026,7 @@ export class AttemptService {
       score: scoreNum,
       isPassed,
       answers: answersMapped,
+      assessment: mappedAssessment,
     };
   }
 

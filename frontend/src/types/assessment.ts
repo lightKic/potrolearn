@@ -1,4 +1,4 @@
-export type AssessmentType = 'QUIZ' | 'EXAM';
+export type AssessmentType = 'DIAGNOSTIC' | 'PRACTICE' | 'QUIZ' | 'EXAM' | 'FINAL';
 
 export type QuestionType =
   | 'MULTIPLE_CHOICE'
@@ -49,6 +49,34 @@ export interface StudentAssessmentDTO {
   isPublished: boolean;
   questions?: StudentAssessmentQuestionDTO[];
   totalPoints?: number;
+}
+
+export interface CreateAssessmentInput {
+  title: string;
+  description?: string | null;
+  type: AssessmentType;
+  weight?: number;
+  passingScore?: number | null;
+  maxAttempts?: number | null;
+  timeLimitMinutes?: number | null;
+  availableFrom?: string | null;
+  availableUntil?: string | null;
+  moduleId?: string | null;
+  lessonId?: string | null;
+}
+
+export interface UpdateAssessmentInput {
+  title?: string;
+  description?: string | null;
+  type?: AssessmentType;
+  weight?: number;
+  passingScore?: number | null;
+  maxAttempts?: number | null;
+  timeLimitMinutes?: number | null;
+  availableFrom?: string | null;
+  availableUntil?: string | null;
+  moduleId?: string | null;
+  lessonId?: string | null;
 }
 
 export interface SaveAnswerInput {

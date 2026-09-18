@@ -7,6 +7,8 @@ import {
   AssessmentAttemptItemDTO,
   TeacherAttemptDTO,
   GradeAnswerInput,
+  CreateAssessmentInput,
+  UpdateAssessmentInput,
 } from '../types/assessment.js';
 
 export const AssessmentServiceAPI = {
@@ -57,6 +59,33 @@ export const AssessmentServiceAPI = {
     return apiFetch<TeacherAttemptDTO>(`/attempts/${attemptId}/answers/${questionId}/grade`, {
       method: 'PUT',
       body: JSON.stringify(input),
+    });
+  },
+
+  createAssessment: async (courseId: string, input: CreateAssessmentInput): Promise<StudentAssessmentDTO> => {
+    return apiFetch<StudentAssessmentDTO>(`/courses/${courseId}/assessments`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+
+  updateAssessment: async (assessmentId: string, input: UpdateAssessmentInput): Promise<StudentAssessmentDTO> => {
+    return apiFetch<StudentAssessmentDTO>(`/assessments/${assessmentId}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+
+  togglePublication: async (assessmentId: string, isPublished: boolean): Promise<StudentAssessmentDTO> => {
+    return apiFetch<StudentAssessmentDTO>(`/assessments/${assessmentId}/publication`, {
+      method: 'PATCH',
+      body: JSON.stringify({ isPublished }),
+    });
+  },
+
+  deleteAssessment: async (assessmentId: string): Promise<{ message: string }> => {
+    return apiFetch<{ message: string }>(`/assessments/${assessmentId}`, {
+      method: 'DELETE',
     });
   },
 };
