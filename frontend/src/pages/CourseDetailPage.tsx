@@ -7,6 +7,9 @@ import { StudentAssessmentDTO, AssessmentType } from '../types/assessment.js';
 import { useAuth } from '../auth/useAuth.js';
 import { ApiError } from '../services/api.js';
 import { MarkdownContent } from '../components/MarkdownContent.js';
+import { PageLoading, SectionLoading } from '../components/common/loading/index.js';
+import { ScheduleModuleModal } from '../components/content/ScheduleModuleModal.js';
+import { PublishModuleNowModal } from '../components/content/PublishModuleNowModal.js';
 
 export const CourseDetailPage: React.FC = () => {
   const { courseId } = useParams<{ courseId: string }>();
@@ -26,15 +29,23 @@ export const CourseDetailPage: React.FC = () => {
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
 
-  // Estados para Módulos y Lecciones
+  // Estados para Módulos y Lecciones (QA-008-AK.2 & QA-008-AK.3)
   const [isModuleModalOpen, setIsModuleModalOpen] = useState(false);
   const [moduleModalMode, setModuleModalMode] = useState<'create' | 'edit'>('create');
   const [selectedModule, setSelectedModule] = useState<Module | null>(null);
   const [moduleTitle, setModuleTitle] = useState('');
   const [moduleDescription, setModuleDescription] = useState('');
-  const [moduleIsPublished, setModuleIsPublished] = useState(true);
+  const [modulePublishOption, setModulePublishOption] = useState<'draft' | 'now' | 'scheduled'>('now');
+  const [moduleScheduledDate, setModuleScheduledDate] = useState('');
+  const [moduleScheduledTime, setModuleScheduledTime] = useState('');
   const [moduleSubmitting, setModuleSubmitting] = useState(false);
   const [moduleError, setModuleError] = useState<string | null>(null);
+
+  // Estados para Programación Batch y Publicación Inmediata de Módulos (QA-008-AK.3)
+  const [scheduleBatchModuleTarget, setScheduleBatchModuleTarget] = useState<Module | null>(null);
+  const [publishNowModuleTarget, setPublishNowModuleTarget] = useState<Module | null>(null);
+  const [cancelScheduleModuleTarget, setCancelScheduleModuleTarget] = useState<Module | null>(null);
+  const [cancellingModuleSchedule, setCancellingModuleSchedule] = useState(false);
 
   const [isLessonModalOpen, setIsLessonModalOpen] = useState(false);
   const [lessonModalMode, setLessonModalMode] = useState<'create' | 'edit'>('create');
@@ -43,7 +54,9 @@ export const CourseDetailPage: React.FC = () => {
   const [lessonTitle, setLessonTitle] = useState('');
   const [lessonDescription, setLessonDescription] = useState('');
   const [lessonContent, setLessonContent] = useState('');
-  const [lessonIsPublished, setLessonIsPublished] = useState(true);
+  const [lessonPublishOption, setLessonPublishOption] = useState<'draft' | 'now' | 'scheduled'>('now');
+  const [lessonScheduledDate, setLessonScheduledDate] = useState('');
+  const [lessonScheduledTime, setLessonScheduledTime] = useState('');
   const [lessonSubmitting, setLessonSubmitting] = useState(false);
   const [lessonError, setLessonError] = useState<string | null>(null);
   const [lessonTab, setLessonTab] = useState<'edit' | 'preview'>('edit');
@@ -88,7 +101,13 @@ export const CourseDetailPage: React.FC = () => {
   const [resetAccessStudent, setResetAccessStudent] = useState<CourseStudent | null>(null);
   const [resendingStudentId, setResendingStudentId] = useState<string | null>(null);
 
-  // Estados para creación de Evaluaciones (QA-005)
+  // Modal de doble confirmación para Quitar Alumno del Curso (QA-007.9)
+  const [dropStudentTarget, setDropStudentTarget] = useState<CourseStudent | null>(null);
+  const [dropConfirmStep, setDropConfirmStep] = useState<1 | 2>(1);
+  const [dropLoading, setDropLoading] = useState<boolean>(false);
+  const [dropError, setDropError] = useState<string | null>(null);
+
+  // Estados para creación de Evaluaciones (QA-005 & QA-008-AJ.2 & QA-008-AK.2)
   const [isCreateAssModalOpen, setIsCreateAssModalOpen] = useState(false);
   const [createAssTitle, setCreateAssTitle] = useState('');
   const [createAssDescription, setCreateAssDescription] = useState('');
@@ -99,10 +118,34 @@ export const CourseDetailPage: React.FC = () => {
   const [createAssMaxAttempts, setCreateAssMaxAttempts] = useState('');
   const [createAssAvailableFrom, setCreateAssAvailableFrom] = useState('');
   const [createAssAvailableUntil, setCreateAssAvailableUntil] = useState('');
+  const [createAssPublishOption, setCreateAssPublishOption] = useState<'draft' | 'now' | 'scheduled'>('now');
+  const [createAssScheduledDate, setCreateAssScheduledDate] = useState('');
+  const [createAssScheduledTime, setCreateAssScheduledTime] = useState('');
   const [createAssUnlimitedAttempts, setCreateAssUnlimitedAttempts] = useState(true);
   const [createAssUnlimitedTime, setCreateAssUnlimitedTime] = useState(true);
+  const [createAssModuleId, setCreateAssModuleId] = useState<string | null>(null);
   const [createAssSubmitting, setCreateAssSubmitting] = useState(false);
   const [createAssError, setCreateAssError] = useState<string | null>(null);
+
+  const handleOpenCreateAssessmentModal = (targetModuleId?: string | null) => {
+    setCreateAssError(null);
+    setCreateAssTitle('');
+    setCreateAssDescription('');
+    setCreateAssType('EXAM');
+    setCreateAssWeight('0');
+    setCreateAssPassingScore('');
+    setCreateAssTimeLimit('');
+    setCreateAssMaxAttempts('');
+    setCreateAssAvailableFrom('');
+    setCreateAssAvailableUntil('');
+    setCreateAssPublishOption('now');
+    setCreateAssScheduledDate('');
+    setCreateAssScheduledTime('');
+    setCreateAssUnlimitedAttempts(true);
+    setCreateAssUnlimitedTime(true);
+    setCreateAssModuleId(targetModuleId || null);
+    setIsCreateAssModalOpen(true);
+  };
 
   const fetchCourseContentData = React.useCallback(async () => {
     if (!courseId) return;
@@ -175,13 +218,78 @@ export const CourseDetailPage: React.FC = () => {
     fetchCourseDetail();
   }, [fetchCourseDetail]);
 
+  // Helper para formatear fechas de publicación programada
+  const formatScheduledDate = (dateStr?: string | null): string => {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    return new Intl.DateTimeFormat('es-MX', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(d);
+  };
+
+  const getScheduledISO = (
+    mode: 'draft' | 'now' | 'scheduled',
+    dateStr: string,
+    timeStr: string
+  ): { isPublished: boolean; scheduledPublishAt: string | null } => {
+    if (mode === 'now') {
+      return { isPublished: true, scheduledPublishAt: null };
+    }
+    if (mode === 'draft') {
+      return { isPublished: false, scheduledPublishAt: null };
+    }
+    if (!dateStr || !timeStr) {
+      return { isPublished: false, scheduledPublishAt: null };
+    }
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const [hours, minutes] = timeStr.split(':').map(Number);
+    const localDate = new Date(year, month - 1, day, hours, minutes);
+    return {
+      isPublished: false,
+      scheduledPublishAt: isNaN(localDate.getTime()) ? null : localDate.toISOString(),
+    };
+  };
+
+  const parseScheduledFields = (scheduledPublishAtStr?: string | null, isPublished?: boolean): {
+    option: 'draft' | 'now' | 'scheduled';
+    date: string;
+    time: string;
+  } => {
+    if (isPublished) {
+      return { option: 'now', date: '', time: '' };
+    }
+    if (scheduledPublishAtStr) {
+      const d = new Date(scheduledPublishAtStr);
+      if (!isNaN(d.getTime())) {
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        const hours = String(d.getHours()).padStart(2, '0');
+        const minutes = String(d.getMinutes()).padStart(2, '0');
+        return {
+          option: 'scheduled',
+          date: `${year}-${month}-${day}`,
+          time: `${hours}:${minutes}`,
+        };
+      }
+    }
+    return { option: 'draft', date: '', time: '' };
+  };
+
   // Handlers para Módulos
   const handleOpenCreateModuleModal = () => {
     setModuleModalMode('create');
     setSelectedModule(null);
     setModuleTitle('');
     setModuleDescription('');
-    setModuleIsPublished(true);
+    setModulePublishOption('now');
+    setModuleScheduledDate('');
+    setModuleScheduledTime('');
     setModuleError(null);
     setIsModuleModalOpen(true);
   };
@@ -191,7 +299,12 @@ export const CourseDetailPage: React.FC = () => {
     setSelectedModule(mod);
     setModuleTitle(mod.title);
     setModuleDescription(mod.description || '');
-    setModuleIsPublished(mod.isPublished);
+
+    const parsed = parseScheduledFields(mod.scheduledPublishAt, mod.isPublished);
+    setModulePublishOption(parsed.option);
+    setModuleScheduledDate(parsed.date);
+    setModuleScheduledTime(parsed.time);
+
     setModuleError(null);
     setIsModuleModalOpen(true);
   };
@@ -206,20 +319,29 @@ export const CourseDetailPage: React.FC = () => {
       return;
     }
 
+    if (modulePublishOption === 'scheduled' && (!moduleScheduledDate || !moduleScheduledTime)) {
+      setModuleError('Por favor especifica la fecha y hora para la publicación programada.');
+      return;
+    }
+
+    const { isPublished, scheduledPublishAt } = getScheduledISO(modulePublishOption, moduleScheduledDate, moduleScheduledTime);
+
     setModuleSubmitting(true);
     try {
       if (moduleModalMode === 'create') {
         await CourseServiceAPI.createModule(courseId, {
           title: moduleTitle.trim(),
           description: moduleDescription.trim() || undefined,
-          isPublished: moduleIsPublished,
+          isPublished,
+          scheduledPublishAt,
         });
-        setActionSuccess('Módulo creado exitosamente.');
+        setActionSuccess('Módulo guardado exitosamente.');
       } else if (selectedModule) {
         await CourseServiceAPI.updateModule(courseId, selectedModule.id, {
           title: moduleTitle.trim(),
           description: moduleDescription.trim() || undefined,
-          isPublished: moduleIsPublished,
+          isPublished,
+          scheduledPublishAt,
         });
         setActionSuccess('Módulo actualizado exitosamente.');
       }
@@ -274,7 +396,9 @@ export const CourseDetailPage: React.FC = () => {
     setLessonTitle('');
     setLessonDescription('');
     setLessonContent('');
-    setLessonIsPublished(true);
+    setLessonPublishOption('now');
+    setLessonScheduledDate('');
+    setLessonScheduledTime('');
     setLessonTab('edit');
     setLessonError(null);
     setIsLessonModalOpen(true);
@@ -287,7 +411,12 @@ export const CourseDetailPage: React.FC = () => {
     setLessonTitle(lesson.title);
     setLessonDescription(lesson.description || '');
     setLessonContent(lesson.content || '');
-    setLessonIsPublished(lesson.isPublished);
+
+    const parsed = parseScheduledFields(lesson.scheduledPublishAt, lesson.isPublished);
+    setLessonPublishOption(parsed.option);
+    setLessonScheduledDate(parsed.date);
+    setLessonScheduledTime(parsed.time);
+
     setLessonTab('edit');
     setLessonError(null);
     setIsLessonModalOpen(true);
@@ -303,6 +432,13 @@ export const CourseDetailPage: React.FC = () => {
       return;
     }
 
+    if (lessonPublishOption === 'scheduled' && (!lessonScheduledDate || !lessonScheduledTime)) {
+      setLessonError('Por favor especifica la fecha y hora para la publicación programada.');
+      return;
+    }
+
+    const { isPublished, scheduledPublishAt } = getScheduledISO(lessonPublishOption, lessonScheduledDate, lessonScheduledTime);
+
     setLessonSubmitting(true);
     try {
       if (lessonModalMode === 'create') {
@@ -310,7 +446,8 @@ export const CourseDetailPage: React.FC = () => {
           title: lessonTitle.trim(),
           description: lessonDescription.trim() || undefined,
           content: lessonContent.trim() || undefined,
-          isPublished: lessonIsPublished,
+          isPublished,
+          scheduledPublishAt,
         });
         setActionSuccess('Lección creada exitosamente.');
       } else if (selectedLesson) {
@@ -318,7 +455,8 @@ export const CourseDetailPage: React.FC = () => {
           title: lessonTitle.trim(),
           description: lessonDescription.trim() || undefined,
           content: lessonContent.trim() || undefined,
-          isPublished: lessonIsPublished,
+          isPublished,
+          scheduledPublishAt,
         });
         setActionSuccess('Lección actualizada exitosamente.');
       }
@@ -365,6 +503,95 @@ export const CourseDetailPage: React.FC = () => {
       } else {
         setActionError('Error al reordenar las lecciones.');
       }
+    }
+  };
+
+  // Quick actions para publicación inmediata y cancelación de programación
+  const handleConfirmCancelModuleSchedule = async () => {
+    if (!courseId || !cancelScheduleModuleTarget) return;
+    setCancellingModuleSchedule(true);
+    setActionError(null);
+    try {
+      const lessonsPayload = (cancelScheduleModuleTarget.lessons || [])
+        .filter((l) => Boolean(l.scheduledPublishAt) && !l.isPublished)
+        .map((l) => ({ type: 'LESSON' as const, id: l.id, scheduledPublishAt: null, action: 'UNSCHEDULE' as const }));
+
+      const assessmentsPayload = assessments
+        .filter((a) => a.moduleId === cancelScheduleModuleTarget.id && Boolean(a.scheduledPublishAt) && !a.isPublished)
+        .map((a) => ({ type: 'ASSESSMENT' as const, id: a.id, scheduledPublishAt: null, action: 'UNSCHEDULE' as const }));
+
+      await CourseServiceAPI.scheduleModuleBatch(courseId, cancelScheduleModuleTarget.id, {
+        moduleScheduledPublishAt: null,
+        contents: [...lessonsPayload, ...assessmentsPayload],
+      });
+
+      setActionSuccess(`Programación del módulo "${cancelScheduleModuleTarget.title}" cancelada. Los contenidos volvieron a estado borrador sin ocultar lo ya publicado.`);
+      setCancelScheduleModuleTarget(null);
+      await fetchCourseContentData();
+      const assessmentsData = await AssessmentServiceAPI.getCourseAssessments(courseId);
+      setAssessments(assessmentsData);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setActionError(err.message);
+      } else {
+        setActionError('Error al cancelar la programación del módulo.');
+      }
+    } finally {
+      setCancellingModuleSchedule(false);
+    }
+  };
+
+  const handlePublishLessonNow = async (moduleId: string, lessonId: string) => {
+    if (!courseId) return;
+    try {
+      setActionError(null);
+      await CourseServiceAPI.updateLesson(courseId, moduleId, lessonId, { isPublished: true, scheduledPublishAt: null });
+      setActionSuccess('Lección publicada exitosamente.');
+      await fetchCourseContentData();
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : 'Error al publicar la lección.');
+    }
+  };
+
+  const handleCancelLessonSchedule = async (moduleId: string, lessonId: string) => {
+    if (!courseId) return;
+    try {
+      setActionError(null);
+      await CourseServiceAPI.updateLesson(courseId, moduleId, lessonId, { isPublished: false, scheduledPublishAt: null });
+      setActionSuccess('Programación cancelada. La lección ahora es borrador.');
+      await fetchCourseContentData();
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : 'Error al cancelar la programación de la lección.');
+    }
+  };
+
+  const handlePublishAssessmentNow = async (assessmentId: string) => {
+    if (!courseId) return;
+    try {
+      setActionError(null);
+      await AssessmentServiceAPI.updateAssessment(assessmentId, { isPublished: true, scheduledPublishAt: null });
+      setActionSuccess('Evaluación publicada exitosamente.');
+      setAssessmentsLoading(true);
+      const assessmentsData = await AssessmentServiceAPI.getCourseAssessments(courseId);
+      setAssessments(assessmentsData);
+      setAssessmentsLoading(false);
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : 'Error al publicar la evaluación.');
+    }
+  };
+
+  const handleCancelAssessmentSchedule = async (assessmentId: string) => {
+    if (!courseId) return;
+    try {
+      setActionError(null);
+      await AssessmentServiceAPI.updateAssessment(assessmentId, { isPublished: false, scheduledPublishAt: null });
+      setActionSuccess('Programación cancelada. La evaluación ahora es borrador.');
+      setAssessmentsLoading(true);
+      const assessmentsData = await AssessmentServiceAPI.getCourseAssessments(courseId);
+      setAssessments(assessmentsData);
+      setAssessmentsLoading(false);
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : 'Error al cancelar la programación de la evaluación.');
     }
   };
 
@@ -630,6 +857,13 @@ export const CourseDetailPage: React.FC = () => {
       return;
     }
 
+    if (createAssPublishOption === 'scheduled' && (!createAssScheduledDate || !createAssScheduledTime)) {
+      setCreateAssError('Por favor especifica la fecha y hora para la publicación programada.');
+      return;
+    }
+
+    const { isPublished, scheduledPublishAt } = getScheduledISO(createAssPublishOption, createAssScheduledDate, createAssScheduledTime);
+
     setCreateAssSubmitting(true);
     setCreateAssError(null);
 
@@ -644,6 +878,9 @@ export const CourseDetailPage: React.FC = () => {
         maxAttempts: maxAttemptsNum,
         availableFrom: fromDateObj ? fromDateObj.toISOString() : null,
         availableUntil: untilDateObj ? untilDateObj.toISOString() : null,
+        moduleId: createAssModuleId || null,
+        isPublished,
+        scheduledPublishAt,
       });
 
       setIsCreateAssModalOpen(false);
@@ -658,6 +895,7 @@ export const CourseDetailPage: React.FC = () => {
       setCreateAssAvailableUntil('');
       setCreateAssUnlimitedAttempts(true);
       setCreateAssUnlimitedTime(true);
+      setCreateAssModuleId(null);
       setActionError(null);
       setActionSuccess('Evaluación creada exitosamente.');
 
@@ -792,6 +1030,35 @@ export const CourseDetailPage: React.FC = () => {
     }
   };
 
+  // Quitar alumno del curso (Doble confirmación QA-007.9)
+  const handleInitiateDropStudent = (student: CourseStudent) => {
+    setDropStudentTarget(student);
+    setDropConfirmStep(1);
+    setDropError(null);
+  };
+
+  const handleConfirmDropStudent = async () => {
+    if (!courseId || !dropStudentTarget) return;
+
+    setDropLoading(true);
+    setDropError(null);
+
+    try {
+      await CourseServiceAPI.dropStudent(courseId, dropStudentTarget.id);
+      setActionSuccess(`Alumno ${dropStudentTarget.name} retirado del curso exitosamente.`);
+      setDropStudentTarget(null);
+      await refreshStudentsList();
+    } catch (err: unknown) {
+      if (err instanceof ApiError) {
+        setDropError(err.message);
+      } else {
+        setDropError('Error al retirar al alumno del curso.');
+      }
+    } finally {
+      setDropLoading(false);
+    }
+  };
+
   const getStatusBadge = (status?: CourseStatus) => {
     if (user?.role === 'STUDENT') {
       return null;
@@ -839,12 +1106,7 @@ export const CourseDetailPage: React.FC = () => {
   };
 
   if (loading) {
-    return (
-      <div className="loading-content" style={{ padding: '60px 0' }}>
-        <div className="loading-spinner" />
-        <p className="loading-text">Cargando detalle del curso...</p>
-      </div>
-    );
+    return <PageLoading title="Cargando detalle del curso..." />;
   }
 
   if (errorMessage || !course) {
@@ -869,6 +1131,11 @@ export const CourseDetailPage: React.FC = () => {
   const canManageTeachers = user?.role === 'ADMIN';
   const canManageStudents = user?.role === 'ADMIN' || (user?.role === 'TEACHER' && isTeacherAssigned);
   const isEnrollmentBlocked = course.status === 'FINISHED' || course.status === 'ARCHIVED';
+  const blockedTooltip = isEnrollmentBlocked
+    ? course.status === 'FINISHED'
+      ? 'El curso está finalizado y ya no admite modificaciones.'
+      : 'El curso está archivado y es de solo lectura.'
+    : undefined;
 
   return (
     <div>
@@ -1090,7 +1357,7 @@ export const CourseDetailPage: React.FC = () => {
               </p>
             </div>
 
-            <div style={{ display: 'flex', gap: '8px' }}>
+            <div>
               <button
                 type="button"
                 id="btn-manual-add-student"
@@ -1098,18 +1365,9 @@ export const CourseDetailPage: React.FC = () => {
                 style={{ width: 'auto' }}
                 onClick={() => handleOpenAddStudentModal('SELECT')}
                 disabled={isEnrollmentBlocked}
+                title={blockedTooltip}
               >
                 + Agregar alumno
-              </button>
-              <button
-                type="button"
-                id="btn-import-excel"
-                className="btn-secondary"
-                style={{ width: 'auto' }}
-                onClick={() => handleOpenAddStudentModal('EXCEL')}
-                disabled={isEnrollmentBlocked}
-              >
-                📁 Importar Excel
               </button>
             </div>
           </div>
@@ -1121,10 +1379,7 @@ export const CourseDetailPage: React.FC = () => {
           )}
 
           {studentsLoading ? (
-            <div className="loading-content" style={{ padding: '20px 0' }}>
-              <div className="loading-spinner" />
-              <p className="loading-text">Cargando alumnos inscritos...</p>
-            </div>
+            <SectionLoading title="Cargando alumnos inscritos..." minHeight="120px" size="small" />
           ) : students.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '30px 16px', backgroundColor: 'var(--color-background)', borderRadius: 'var(--radius-sm)' }}>
               <p className="dashboard-card-desc" style={{ marginBottom: 0 }}>
@@ -1151,27 +1406,27 @@ export const CourseDetailPage: React.FC = () => {
                       <td style={{ padding: '12px 10px' }}>{st.email}</td>
                       <td style={{ padding: '12px 10px' }}>{getAccountStatusBadge(st.accountStatus)}</td>
                       <td style={{ padding: '12px 10px', textAlign: 'right' }}>
-                        {st.accountStatus !== 'ACTIVE' ? (
+                        {st.accountStatus !== 'ACTIVE' && (
                           <button
                             type="button"
                             className="btn-secondary"
-                            style={{ fontSize: '0.775rem', padding: '4px 8px' }}
+                            style={{ fontSize: '0.775rem', padding: '4px 8px', marginRight: '6px' }}
                             onClick={() => handleResendInvitation(st.id)}
                             disabled={resendingStudentId === st.id}
                           >
                             {resendingStudentId === st.id ? 'Reenviando...' : 'Reenviar invitación'}
                           </button>
-                        ) : (
-                          <button
-                            type="button"
-                            className="btn-secondary"
-                            style={{ fontSize: '0.775rem', padding: '4px 8px', color: '#991b1b', borderColor: '#fca5a5' }}
-                            onClick={() => setResetAccessStudent(st)}
-                            disabled={actionLoading}
-                          >
-                            Restablecer acceso
-                          </button>
                         )}
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          style={{ fontSize: '0.775rem', padding: '4px 8px', color: '#991b1b', borderColor: '#fca5a5' }}
+                          onClick={() => handleInitiateDropStudent(st)}
+                          disabled={isEnrollmentBlocked || dropLoading}
+                          title={blockedTooltip}
+                        >
+                          Quitar del curso
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -1194,13 +1449,15 @@ export const CourseDetailPage: React.FC = () => {
             </p>
           </div>
 
-          {(user?.role === 'ADMIN' || (user?.role === 'TEACHER' && isTeacherAssigned)) && !isEnrollmentBlocked && (
+          {(user?.role === 'ADMIN' || (user?.role === 'TEACHER' && isTeacherAssigned)) && (
             <button
               type="button"
               id="btn-add-module"
               className="btn-primary"
               style={{ width: 'auto' }}
               onClick={handleOpenCreateModuleModal}
+              disabled={isEnrollmentBlocked}
+              title={blockedTooltip}
             >
               + Nuevo módulo
             </button>
@@ -1252,10 +1509,7 @@ export const CourseDetailPage: React.FC = () => {
         )}
 
         {contentLoading ? (
-          <div className="loading-content" style={{ padding: '20px 0' }}>
-            <div className="loading-spinner" />
-            <p className="loading-text">Cargando contenido del curso...</p>
-          </div>
+          <SectionLoading title="Cargando contenido del curso..." minHeight="120px" size="small" />
         ) : !courseContent?.modules || courseContent.modules.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '30px 16px', backgroundColor: 'var(--color-background)', borderRadius: 'var(--radius-sm)' }}>
             <p className="dashboard-card-desc" style={{ marginBottom: 0 }}>
@@ -1282,19 +1536,34 @@ export const CourseDetailPage: React.FC = () => {
                 }}
               >
                 {/* Encabezado del Módulo */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px', marginBottom: '12px' }}>
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                <div className="module-header-container">
+                  {/* Bloque 1: Información Principal del Módulo (Izquierda en Desktop) */}
+                  <div className="module-header-info">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
                       <span className="role-pill teacher" style={{ fontSize: '0.75rem' }}>
                         Módulo #{mod.order}
                       </span>
                       {user?.role !== 'STUDENT' && (
                         mod.isPublished ? (
                           <span className="role-pill student" style={{ fontSize: '0.75rem' }}>Publicado</span>
+                        ) : mod.scheduledPublishAt ? (
+                          <span className="role-pill" style={{ backgroundColor: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', fontSize: '0.75rem' }}>
+                            Programado: {formatScheduledDate(mod.scheduledPublishAt)} ⏰
+                          </span>
                         ) : (
                           <span className="role-pill admin" style={{ backgroundColor: '#fef3c7', color: '#92400e', fontSize: '0.75rem' }}>Borrador</span>
                         )
                       )}
+                      {(() => {
+                        const schedCount = (mod.lessons?.filter((l) => !l.isPublished && Boolean(l.scheduledPublishAt)).length ?? 0) +
+                          assessments.filter((a) => a.moduleId === mod.id && !a.isPublished && Boolean(a.scheduledPublishAt)).length;
+                        if (schedCount === 0 || user?.role === 'STUDENT') return null;
+                        return (
+                          <span className="role-pill" style={{ backgroundColor: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0', fontSize: '0.725rem' }}>
+                            {schedCount} {schedCount === 1 ? 'contenido programado' : 'contenidos programados'} ⏰
+                          </span>
+                        );
+                      })()}
                     </div>
                     <h4 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--color-text)', margin: '4px 0' }}>
                       {mod.title}
@@ -1306,49 +1575,99 @@ export const CourseDetailPage: React.FC = () => {
                     )}
                   </div>
 
-                  {/* Acciones del Módulo */}
-                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-                    {(user?.role === 'ADMIN' || (user?.role === 'TEACHER' && isTeacherAssigned)) && !isEnrollmentBlocked && (
-                      <>
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          style={{ padding: '4px 8px', fontSize: '0.775rem' }}
-                          aria-label={`Subir módulo ${mod.title}`}
-                          onClick={() => handleReorderModule(mod.id, 'up')}
-                          disabled={modIdx === 0}
-                        >
-                          ↑ Subir
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          style={{ padding: '4px 8px', fontSize: '0.775rem' }}
-                          aria-label={`Bajar módulo ${mod.title}`}
-                          onClick={() => handleReorderModule(mod.id, 'down')}
-                          disabled={modIdx === (courseContent.modules.length - 1)}
-                        >
-                          ↓ Bajar
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          style={{ padding: '4px 8px', fontSize: '0.775rem' }}
-                          onClick={() => handleOpenEditModuleModal(mod)}
-                        >
-                          Editar
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-primary"
-                          style={{ padding: '4px 10px', fontSize: '0.775rem', width: 'auto' }}
-                          onClick={() => handleOpenCreateLessonModal(mod.id)}
-                        >
-                          + Lección
-                        </button>
-                      </>
-                    )}
-                  </div>
+                  {/* Bloque 2: Fila de Acciones del Módulo (Derecha en Desktop, Abajo en Mobile) */}
+                  {(user?.role === 'ADMIN' || (user?.role === 'TEACHER' && isTeacherAssigned)) && (
+                    <div className="module-header-actions">
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        style={{ padding: '4px 10px', fontSize: '0.775rem', width: 'auto', backgroundColor: '#0f4c81', borderColor: '#0f4c81' }}
+                        onClick={() => setScheduleBatchModuleTarget(mod)}
+                        disabled={isEnrollmentBlocked}
+                        title="Configurar programación del módulo y su contenido"
+                      >
+                        ⏰ {mod.scheduledPublishAt ? 'Editar programación' : 'Programar módulo'}
+                      </button>
+                      {!mod.isPublished && (
+                        <>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            style={{ padding: '4px 8px', fontSize: '0.775rem', backgroundColor: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}
+                            onClick={() => setPublishNowModuleTarget(mod)}
+                            disabled={isEnrollmentBlocked}
+                            title="Publicar ahora de forma selectiva"
+                          >
+                            ⚡ Publicar ahora
+                          </button>
+                          {mod.scheduledPublishAt && (
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              style={{ padding: '4px 8px', fontSize: '0.775rem', backgroundColor: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}
+                              onClick={() => setCancelScheduleModuleTarget(mod)}
+                              disabled={isEnrollmentBlocked}
+                              title="Cancelar programación y volver a borrador"
+                            >
+                              🚫 Cancelar programación
+                            </button>
+                          )}
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ padding: '4px 8px', fontSize: '0.775rem' }}
+                        aria-label={`Subir módulo ${mod.title}`}
+                        onClick={() => handleReorderModule(mod.id, 'up')}
+                        disabled={isEnrollmentBlocked || modIdx === 0}
+                        title="Subir módulo"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ padding: '4px 8px', fontSize: '0.775rem' }}
+                        aria-label={`Bajar módulo ${mod.title}`}
+                        onClick={() => handleReorderModule(mod.id, 'down')}
+                        disabled={isEnrollmentBlocked || modIdx === (courseContent.modules.length - 1)}
+                        title="Bajar módulo"
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ padding: '4px 8px', fontSize: '0.775rem' }}
+                        onClick={() => handleOpenEditModuleModal(mod)}
+                        disabled={isEnrollmentBlocked}
+                        title={blockedTooltip}
+                      >
+                        Editar
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        style={{ padding: '4px 10px', fontSize: '0.775rem', width: 'auto' }}
+                        onClick={() => handleOpenCreateLessonModal(mod.id)}
+                        disabled={isEnrollmentBlocked}
+                        title={blockedTooltip}
+                      >
+                        + Lección
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        style={{ padding: '4px 10px', fontSize: '0.775rem', width: 'auto' }}
+                        onClick={() => handleOpenCreateAssessmentModal(mod.id)}
+                        disabled={isEnrollmentBlocked}
+                        title={blockedTooltip}
+                      >
+                        + Evaluación
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Sub-lista de Lecciones */}
@@ -1389,6 +1708,10 @@ export const CourseDetailPage: React.FC = () => {
                               {user?.role !== 'STUDENT' && (
                                 les.isPublished ? (
                                   <span className="role-pill student" style={{ fontSize: '0.675rem', padding: '1px 6px' }}>Publicada</span>
+                                ) : les.scheduledPublishAt ? (
+                                  <span className="role-pill" style={{ backgroundColor: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', fontSize: '0.675rem', padding: '1px 6px' }}>
+                                    Programada: {formatScheduledDate(les.scheduledPublishAt)} ⏰
+                                  </span>
                                 ) : (
                                   <span className="role-pill admin" style={{ backgroundColor: '#fef3c7', color: '#92400e', fontSize: '0.675rem', padding: '1px 6px' }}>Borrador</span>
                                 )
@@ -1405,17 +1728,42 @@ export const CourseDetailPage: React.FC = () => {
                           </div>
 
                           <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                            {(user?.role === 'ADMIN' || (user?.role === 'TEACHER' && isTeacherAssigned)) && !isEnrollmentBlocked && (
+                            {(user?.role === 'ADMIN' || (user?.role === 'TEACHER' && isTeacherAssigned)) && (
                               <>
+                                {!les.isPublished && les.scheduledPublishAt && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="btn-secondary"
+                                      style={{ padding: '3px 6px', fontSize: '0.725rem', backgroundColor: '#ecfdf5', color: '#047857' }}
+                                      onClick={() => handlePublishLessonNow(mod.id, les.id)}
+                                      disabled={isEnrollmentBlocked}
+                                      title="Publicar inmediatamente"
+                                    >
+                                      Publicar ahora
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn-secondary"
+                                      style={{ padding: '3px 6px', fontSize: '0.725rem', backgroundColor: '#fef2f2', color: '#991b1b' }}
+                                      onClick={() => handleCancelLessonSchedule(mod.id, les.id)}
+                                      disabled={isEnrollmentBlocked}
+                                      title="Cancelar programación y volver a borrador"
+                                    >
+                                      Cancelar programación
+                                    </button>
+                                  </>
+                                )}
                                 <button
                                   type="button"
                                   className="btn-secondary"
                                   style={{ padding: '3px 6px', fontSize: '0.725rem' }}
                                   aria-label={`Subir lección ${les.title}`}
                                   onClick={() => handleReorderLesson(mod.id, les.id, 'up')}
-                                  disabled={lesIdx === 0}
+                                  disabled={isEnrollmentBlocked || lesIdx === 0}
+                                  title="Subir lección"
                                 >
-                                  ↑ Subir
+                                  ↑
                                 </button>
                                 <button
                                   type="button"
@@ -1423,15 +1771,18 @@ export const CourseDetailPage: React.FC = () => {
                                   style={{ padding: '3px 6px', fontSize: '0.725rem' }}
                                   aria-label={`Bajar lección ${les.title}`}
                                   onClick={() => handleReorderLesson(mod.id, les.id, 'down')}
-                                  disabled={lesIdx === (mod.lessons!.length - 1)}
+                                  disabled={isEnrollmentBlocked || lesIdx === (mod.lessons!.length - 1)}
+                                  title="Bajar lección"
                                 >
-                                  ↓ Bajar
+                                  ↓
                                 </button>
                                 <button
                                   type="button"
                                   className="btn-secondary"
                                   style={{ padding: '3px 6px', fontSize: '0.725rem' }}
                                   onClick={() => handleOpenEditLessonModal(mod.id, les)}
+                                  disabled={isEnrollmentBlocked}
+                                  title={blockedTooltip}
                                 >
                                   Editar
                                 </button>
@@ -1452,96 +1803,230 @@ export const CourseDetailPage: React.FC = () => {
                     </div>
                   )}
                 </div>
+
+                {/* Sub-lista de Evaluaciones del Módulo */}
+                {(() => {
+                  const modAssessments = assessments.filter((a) => a.moduleId === mod.id);
+                  if (modAssessments.length === 0) return null;
+                  return (
+                    <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '12px', marginTop: '12px' }}>
+                      <div style={{ fontSize: '0.825rem', fontWeight: 600, color: 'var(--color-muted)', marginBottom: '8px' }}>
+                        Evaluaciones ({modAssessments.length})
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {modAssessments.map((ass) => (
+                          <div
+                            key={ass.id}
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              flexWrap: 'wrap',
+                              gap: '8px',
+                              padding: '8px 12px',
+                              backgroundColor: 'var(--color-surface, #ffffff)',
+                              border: '1px solid var(--color-border)',
+                              borderRadius: 'var(--radius-sm)',
+                            }}
+                          >
+                            <div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--color-text)' }}>
+                                  {ass.title}
+                                </span>
+                                <span className={`role-pill ${ass.type === 'EXAM' ? 'admin' : 'student'}`} style={{ fontSize: '0.675rem', padding: '1px 6px' }}>
+                                  {ass.type === 'EXAM' ? 'Examen' : ass.type === 'QUIZ' ? 'Cuestionario' : ass.type === 'FINAL' ? 'Evaluación Final' : ass.type}
+                                </span>
+                                {user?.role !== 'STUDENT' && (
+                                  <span
+                                    className="role-pill"
+                                    style={{
+                                      fontSize: '0.675rem',
+                                      padding: '1px 6px',
+                                      backgroundColor: ass.isPublished ? '#ecfdf5' : ass.scheduledPublishAt ? '#eff6ff' : '#fffbeb',
+                                      color: ass.isPublished ? '#047857' : ass.scheduledPublishAt ? '#1d4ed8' : '#b45309',
+                                      border: `1px solid ${ass.isPublished ? '#a7f3d0' : ass.scheduledPublishAt ? '#bfdbfe' : '#fde68a'}`,
+                                    }}
+                                  >
+                                    {ass.isPublished
+                                      ? 'Publicada 🟢'
+                                      : ass.scheduledPublishAt
+                                      ? `Programada: ${formatScheduledDate(ass.scheduledPublishAt)} ⏰`
+                                      : 'Borrador 🟡'}
+                                  </span>
+                                )}
+                              </div>
+                              {ass.description && (
+                                <div style={{ fontSize: '0.8rem', color: 'var(--color-muted)', marginTop: '2px' }}>
+                                  {ass.description}
+                                </div>
+                              )}
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                              {(user?.role === 'ADMIN' || (user?.role === 'TEACHER' && isTeacherAssigned)) && !ass.isPublished && ass.scheduledPublishAt && (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    style={{ padding: '3px 6px', fontSize: '0.725rem', backgroundColor: '#ecfdf5', color: '#047857' }}
+                                    onClick={() => handlePublishAssessmentNow(ass.id)}
+                                    disabled={isEnrollmentBlocked}
+                                    title="Publicar inmediatamente"
+                                  >
+                                    Publicar ahora
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    style={{ padding: '3px 6px', fontSize: '0.725rem', backgroundColor: '#fef2f2', color: '#991b1b' }}
+                                    onClick={() => handleCancelAssessmentSchedule(ass.id)}
+                                    disabled={isEnrollmentBlocked}
+                                    title="Cancelar programación y volver a borrador"
+                                  >
+                                    Cancelar programación
+                                  </button>
+                                </>
+                              )}
+                              <button
+                                type="button"
+                                className="btn-secondary"
+                                style={{ padding: '3px 8px', fontSize: '0.75rem', backgroundColor: 'var(--color-primary-light, #eff6ff)' }}
+                                onClick={() => navigate(`/app/courses/${courseId}/assessments/${ass.id}`)}
+                              >
+                                {user?.role === 'STUDENT' ? 'Ver / Realizar →' : 'Ver / Administrar →'}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             ))}
           </div>
         )}
       </div>
 
-      {/* Sección Real de Evaluaciones del Curso (Fase 8.4-F) */}
-      <div className="dashboard-card" style={{ marginBottom: '24px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
-          <h3 className="dashboard-card-title" id="assessments-section-title" style={{ margin: 0 }}>
-            Evaluaciones del Curso ({assessments.length})
-          </h3>
-          {(user?.role === 'ADMIN' || (user?.role === 'TEACHER' && isTeacherAssigned)) && !isEnrollmentBlocked && (
-            <button
-              type="button"
-              className="btn-primary"
-              style={{ width: 'auto', padding: '6px 14px', fontSize: '0.875rem' }}
-              onClick={() => {
-                setCreateAssError(null);
-                setIsCreateAssModalOpen(true);
-              }}
-            >
-              + Nueva Evaluación
-            </button>
-          )}
-        </div>
-        {assessmentsLoading ? (
-          <p className="loading-text">Cargando evaluaciones...</p>
-        ) : assessments.length === 0 ? (
-          <p className="dashboard-card-desc" style={{ marginBottom: 0 }}>
-            No hay evaluaciones disponibles en este curso.
-          </p>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {assessments.map((ass) => (
-              <div
-                key={ass.id}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  padding: '12px 16px',
-                  backgroundColor: 'var(--color-background)',
-                  borderRadius: 'var(--radius-sm)',
-                  border: '1px solid var(--color-border)',
-                }}
-              >
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <strong style={{ color: 'var(--color-text)', fontSize: '1rem' }}>{ass.title}</strong>
-                    <span className={`role-pill ${ass.type === 'EXAM' ? 'admin' : 'student'}`} style={{ fontSize: '0.75rem' }}>
-                      {ass.type === 'EXAM' ? 'Examen' : 'Cuestionario'}
-                    </span>
-                    {user?.role !== 'STUDENT' && (
-                      <span
-                        className="role-pill"
-                        style={{
-                          fontSize: '0.75rem',
-                          backgroundColor: ass.isPublished ? '#ecfdf5' : '#fffbeb',
-                          color: ass.isPublished ? '#047857' : '#b45309',
-                          border: `1px solid ${ass.isPublished ? '#a7f3d0' : '#fde68a'}`,
-                        }}
-                      >
-                        {ass.isPublished ? 'Publicada 🟢' : 'Borrador 🟡'}
-                      </span>
-                    )}
-                  </div>
-                  {ass.description && (
-                    <div style={{ fontSize: '0.85rem', color: 'var(--color-muted)', marginTop: '4px' }}>
-                      {ass.description}
-                    </div>
-                  )}
-                  <div style={{ fontSize: '0.8rem', color: 'var(--color-muted)', marginTop: '4px' }}>
-                    {ass.timeLimitMinutes ? `⏱️ ${ass.timeLimitMinutes} min` : '⏱️ Sin límite de tiempo'} • {ass.questions?.length || 0} preguntas
-                  </div>
-                </div>
-
+      {/* Sección Real de Evaluaciones Globales del Curso */}
+      {(() => {
+        const globalAssessments = assessments.filter((a) => !a.moduleId);
+        return (
+          <div className="dashboard-card" style={{ marginBottom: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+              <h3 className="dashboard-card-title" id="assessments-section-title" style={{ margin: 0 }}>
+                Evaluaciones globales del curso ({globalAssessments.length})
+              </h3>
+              {(user?.role === 'ADMIN' || (user?.role === 'TEACHER' && isTeacherAssigned)) && (
                 <button
                   type="button"
                   className="btn-primary"
-                  style={{ width: 'auto', padding: '6px 16px', fontSize: '0.875rem' }}
-                  onClick={() => navigate(`/app/courses/${courseId}/assessments/${ass.id}`)}
+                  style={{ width: 'auto', padding: '6px 14px', fontSize: '0.875rem' }}
+                  onClick={() => handleOpenCreateAssessmentModal(null)}
+                  disabled={isEnrollmentBlocked}
+                  title={blockedTooltip}
                 >
-                  {user?.role === 'STUDENT' ? 'Ver / Realizar Evaluación →' : 'Ver / Administrar Evaluación →'}
+                  + Nueva Evaluación
                 </button>
+              )}
+            </div>
+            {assessmentsLoading ? (
+              <SectionLoading title="Cargando evaluaciones..." minHeight="100px" size="small" />
+            ) : globalAssessments.length === 0 ? (
+              <p className="dashboard-card-desc" style={{ marginBottom: 0 }}>
+                No hay evaluaciones globales en este curso.
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {globalAssessments.map((ass) => (
+                  <div
+                    key={ass.id}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '12px 16px',
+                      backgroundColor: 'var(--color-background)',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--color-border)',
+                    }}
+                  >
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <strong style={{ color: 'var(--color-text)', fontSize: '1rem' }}>{ass.title}</strong>
+                        <span className={`role-pill ${ass.type === 'EXAM' ? 'admin' : 'student'}`} style={{ fontSize: '0.75rem' }}>
+                          {ass.type === 'EXAM' ? 'Examen' : ass.type === 'QUIZ' ? 'Cuestionario' : ass.type === 'FINAL' ? 'Evaluación Final' : ass.type}
+                        </span>
+                        {user?.role !== 'STUDENT' && (
+                          <span
+                            className="role-pill"
+                            style={{
+                              fontSize: '0.75rem',
+                              backgroundColor: ass.isPublished ? '#ecfdf5' : ass.scheduledPublishAt ? '#eff6ff' : '#fffbeb',
+                              color: ass.isPublished ? '#047857' : ass.scheduledPublishAt ? '#1d4ed8' : '#b45309',
+                              border: `1px solid ${ass.isPublished ? '#a7f3d0' : ass.scheduledPublishAt ? '#bfdbfe' : '#fde68a'}`,
+                            }}
+                          >
+                            {ass.isPublished
+                              ? 'Publicada 🟢'
+                              : ass.scheduledPublishAt
+                              ? `Programada: ${formatScheduledDate(ass.scheduledPublishAt)} ⏰`
+                              : 'Borrador 🟡'}
+                          </span>
+                        )}
+                      </div>
+                      {ass.description && (
+                        <div style={{ fontSize: '0.85rem', color: 'var(--color-muted)', marginTop: '4px' }}>
+                          {ass.description}
+                        </div>
+                      )}
+                      <div style={{ fontSize: '0.8rem', color: 'var(--color-muted)', marginTop: '4px' }}>
+                        {ass.timeLimitMinutes ? `⏱️ ${ass.timeLimitMinutes} min` : '⏱️ Sin límite de tiempo'} • {ass.questions?.length || 0} preguntas
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      {(user?.role === 'ADMIN' || (user?.role === 'TEACHER' && isTeacherAssigned)) && !ass.isPublished && ass.scheduledPublishAt && (
+                        <>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            style={{ padding: '6px 12px', fontSize: '0.8rem', backgroundColor: '#ecfdf5', color: '#047857' }}
+                            onClick={() => handlePublishAssessmentNow(ass.id)}
+                            disabled={isEnrollmentBlocked}
+                            title="Publicar inmediatamente"
+                          >
+                            Publicar ahora
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            style={{ padding: '6px 12px', fontSize: '0.8rem', backgroundColor: '#fef2f2', color: '#991b1b' }}
+                            onClick={() => handleCancelAssessmentSchedule(ass.id)}
+                            disabled={isEnrollmentBlocked}
+                            title="Cancelar programación y volver a borrador"
+                          >
+                            Cancelar programación
+                          </button>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        style={{ width: 'auto', padding: '6px 16px', fontSize: '0.875rem' }}
+                        onClick={() => navigate(`/app/courses/${courseId}/assessments/${ass.id}`)}
+                      >
+                        {user?.role === 'STUDENT' ? 'Ver / Realizar Evaluación →' : 'Ver / Administrar Evaluación →'}
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
-        )}
-      </div>
+        );
+      })()}
 
       {/* Modal Principal de Agregar Alumnos (UX-002 Flow) */}
       {(isAddStudentModalOpen || isManualModalOpen || isImportModalOpen) && (
@@ -2191,6 +2676,94 @@ export const CourseDetailPage: React.FC = () => {
         </div>
       )}
 
+      {/* Modal de Doble Confirmación para Quitar Alumno del Curso (QA-007.9) */}
+      {dropStudentTarget && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            padding: '16px',
+          }}
+        >
+          <div className="auth-card" style={{ maxWidth: '480px' }}>
+            {dropConfirmStep === 1 ? (
+              <>
+                <h2 className="page-title" style={{ fontSize: '1.25rem', marginBottom: '12px' }}>
+                  ¿Quitar alumno del curso?
+                </h2>
+                <p className="page-description" style={{ marginBottom: '20px', fontSize: '0.9rem', color: 'var(--color-muted)' }}>
+                  El alumno dejará de formar parte de este curso. Su avance e historial académico se conservarán.
+                </p>
+                {dropError && <div className="alert alert-danger" style={{ marginBottom: '16px' }}>{dropError}</div>}
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      setDropStudentTarget(null);
+                      setDropError(null);
+                    }}
+                    disabled={dropLoading}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    style={{ width: 'auto' }}
+                    onClick={() => setDropConfirmStep(2)}
+                    disabled={dropLoading}
+                  >
+                    Continuar
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 className="page-title" style={{ fontSize: '1.25rem', marginBottom: '12px', color: 'var(--color-danger)' }}>
+                  Confirmación final
+                </h2>
+                <p className="page-description" style={{ marginBottom: '20px', fontSize: '0.9rem' }}>
+                  ¿Estás seguro de que deseas quitar a <strong>{dropStudentTarget.name}</strong> del curso <strong>{course?.name}</strong>?
+                  El alumno perderá su acceso activo al curso, pero su historial académico será conservado.
+                </p>
+                {dropError && <div className="alert alert-danger" style={{ marginBottom: '16px' }}>{dropError}</div>}
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      setDropStudentTarget(null);
+                      setDropError(null);
+                    }}
+                    disabled={dropLoading}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    style={{ width: 'auto', backgroundColor: '#dc2626' }}
+                    onClick={handleConfirmDropStudent}
+                    disabled={dropLoading}
+                  >
+                    {dropLoading ? 'Quitando alumno...' : 'Sí, quitar del curso'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Modal de Creación / Edición de Módulo */}
       {isModuleModalOpen && (
         <div
@@ -2251,17 +2824,78 @@ export const CourseDetailPage: React.FC = () => {
                 />
               </div>
 
-              <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <input
-                  id="module-published-checkbox"
-                  type="checkbox"
-                  checked={moduleIsPublished}
-                  onChange={(e) => setModuleIsPublished(e.target.checked)}
-                  disabled={moduleSubmitting}
-                />
-                <label htmlFor="module-published-checkbox" style={{ fontSize: '0.9rem', color: 'var(--color-text)', cursor: 'pointer' }}>
-                  Publicado (visible para alumnos)
+              <div className="form-group">
+                <label className="form-label" style={{ fontWeight: 600, marginBottom: '8px', display: 'block' }}>
+                  Disponibilidad de Publicación
                 </label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem' }}>
+                    <input
+                      type="radio"
+                      name="modulePublishOption"
+                      value="draft"
+                      checked={modulePublishOption === 'draft'}
+                      onChange={() => setModulePublishOption('draft')}
+                      disabled={moduleSubmitting}
+                    />
+                    <span>Guardar como borrador (no visible para alumnos)</span>
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem' }}>
+                    <input
+                      type="radio"
+                      name="modulePublishOption"
+                      value="now"
+                      checked={modulePublishOption === 'now'}
+                      onChange={() => setModulePublishOption('now')}
+                      disabled={moduleSubmitting}
+                    />
+                    <span>Publicar inmediatamente</span>
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem' }}>
+                    <input
+                      type="radio"
+                      name="modulePublishOption"
+                      value="scheduled"
+                      checked={modulePublishOption === 'scheduled'}
+                      onChange={() => setModulePublishOption('scheduled')}
+                      disabled={moduleSubmitting}
+                    />
+                    <span>Programar publicación</span>
+                  </label>
+                </div>
+
+                {modulePublishOption === 'scheduled' && (
+                  <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
+                    <div style={{ flex: 1 }}>
+                      <label className="form-label" htmlFor="module-scheduled-date" style={{ fontSize: '0.8rem' }}>
+                        Fecha de publicación
+                      </label>
+                      <input
+                        id="module-scheduled-date"
+                        type="date"
+                        className="form-input"
+                        value={moduleScheduledDate}
+                        onChange={(e) => setModuleScheduledDate(e.target.value)}
+                        disabled={moduleSubmitting}
+                        required
+                      />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label className="form-label" htmlFor="module-scheduled-time" style={{ fontSize: '0.8rem' }}>
+                        Hora de publicación
+                      </label>
+                      <input
+                        id="module-scheduled-time"
+                        type="time"
+                        className="form-input"
+                        value={moduleScheduledTime}
+                        onChange={(e) => setModuleScheduledTime(e.target.value)}
+                        disabled={moduleSubmitting}
+                        required
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
@@ -2289,126 +2923,250 @@ export const CourseDetailPage: React.FC = () => {
         </div>
       )}
 
-      {/* Modal de Creación / Edición de Lección */}
+      {/* Modal Premium de Creación / Edición de Lección (QA-008-AJ.4) */}
       {isLessonModalOpen && (
         <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 100,
-            padding: '16px',
+          className="assessment-edit-modal-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsLessonModalOpen(false);
           }}
         >
-          <div className="auth-card" style={{ maxWidth: '560px' }}>
-            <h2 className="page-title" style={{ fontSize: '1.25rem', marginBottom: '16px' }}>
-              {lessonModalMode === 'create' ? 'Nueva Lección' : 'Editar Lección'}
-            </h2>
-
-            {lessonError && (
-              <div className="alert alert-danger" style={{ marginBottom: '16px' }}>
-                {lessonError}
+          <div className="assessment-edit-modal-card">
+            {/* Header del Modal */}
+            <div className="assessment-edit-modal-header">
+              <div className="assessment-edit-modal-header-left">
+                <div className="assessment-edit-modal-header-icon">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="assessment-edit-modal-title">
+                    {lessonModalMode === 'create' ? 'Nueva Lección' : 'Editar Lección'}
+                  </h3>
+                  <p className="assessment-edit-modal-subtitle">
+                    {lessonModalMode === 'create'
+                      ? 'Crea y configura el contenido de la lección'
+                      : 'Actualiza el contenido y disponibilidad de la lección'}
+                  </p>
+                </div>
               </div>
-            )}
+              <button
+                type="button"
+                className="assessment-edit-modal-close"
+                onClick={() => setIsLessonModalOpen(false)}
+                aria-label="Cerrar modal"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
 
-            <form onSubmit={handleSaveLesson}>
-              <div className="form-group">
-                <label className="form-label" htmlFor="lesson-title-input">
-                  Título de la lección
-                </label>
-                <input
-                  id="lesson-title-input"
-                  type="text"
-                  className="form-input"
-                  placeholder="Ej: Conceptos básicos"
-                  value={lessonTitle}
-                  onChange={(e) => setLessonTitle(e.target.value)}
-                  disabled={lessonSubmitting}
-                  required
-                />
-              </div>
+            {/* Form & Body */}
+            <form onSubmit={handleSaveLesson} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+              <div className="assessment-edit-modal-body">
+                {lessonError && (
+                  <div className="alert alert-error" style={{ marginBottom: '0' }}>
+                    {lessonError}
+                  </div>
+                )}
 
-              <div className="form-group">
-                <label className="form-label" htmlFor="lesson-description-input">
-                  Descripción corta (Opcional)
-                </label>
-                <input
-                  id="lesson-description-input"
-                  type="text"
-                  className="form-input"
-                  placeholder="Descripción resumida..."
-                  value={lessonDescription}
-                  onChange={(e) => setLessonDescription(e.target.value)}
-                  disabled={lessonSubmitting}
-                />
-              </div>
+                {/* Sección 1: Información General */}
+                <div className="assessment-edit-section">
+                  <div className="assessment-edit-section-title-group">
+                    <span className="assessment-edit-section-icon">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                      </svg>
+                    </span>
+                    <div>
+                      <h4 className="assessment-edit-section-title">Información General</h4>
+                      <div className="assessment-edit-section-subtitle">Datos principales que identifican la lección</div>
+                    </div>
+                  </div>
 
-              <div className="form-group">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <label className="form-label" htmlFor="lesson-content-input" style={{ marginBottom: 0 }}>
-                    Contenido de la lección (Markdown + KaTeX)
-                  </label>
-                  <div style={{ display: 'flex', gap: '4px' }}>
-                    <button
-                      type="button"
-                      className={lessonTab === 'edit' ? 'btn-primary' : 'btn-secondary'}
-                      style={{ padding: '2px 8px', fontSize: '0.75rem', width: 'auto' }}
-                      onClick={() => setLessonTab('edit')}
-                    >
-                      Editar
-                    </button>
-                    <button
-                      type="button"
-                      className={lessonTab === 'preview' ? 'btn-primary' : 'btn-secondary'}
-                      style={{ padding: '2px 8px', fontSize: '0.75rem', width: 'auto' }}
-                      onClick={() => setLessonTab('preview')}
-                    >
-                      Vista previa
-                    </button>
+                  <div className="assessment-edit-field">
+                    <label className="assessment-edit-label" htmlFor="lesson-title-input">
+                      <span>Título de la lección <span className="assessment-edit-label-required">*</span></span>
+                    </label>
+                    <input
+                      id="lesson-title-input"
+                      type="text"
+                      className="assessment-edit-input"
+                      placeholder="Ej: Conceptos básicos de álgebra"
+                      value={lessonTitle}
+                      onChange={(e) => setLessonTitle(e.target.value)}
+                      disabled={lessonSubmitting}
+                      required
+                    />
+                  </div>
+
+                  <div className="assessment-edit-field">
+                    <label className="assessment-edit-label" htmlFor="lesson-description-input">
+                      Descripción corta (Opcional)
+                    </label>
+                    <input
+                      id="lesson-description-input"
+                      type="text"
+                      className="assessment-edit-input"
+                      placeholder="Descripción resumida del tema..."
+                      value={lessonDescription}
+                      onChange={(e) => setLessonDescription(e.target.value)}
+                      disabled={lessonSubmitting}
+                    />
                   </div>
                 </div>
 
-                {lessonTab === 'edit' ? (
-                  <textarea
-                    id="lesson-content-input"
-                    className="form-input"
-                    rows={6}
-                    placeholder="Escribe el contenido en Markdown. Ej: # Título&#10;&#10;Fórmula: $x + 2 = 5$&#10;&#10;$$&#10;x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}&#10;$$"
-                    value={lessonContent}
-                    onChange={(e) => setLessonContent(e.target.value)}
-                    disabled={lessonSubmitting}
-                  />
-                ) : (
-                  <div style={{ border: '1px solid var(--color-border)', borderRadius: '6px', padding: '12px', minHeight: '140px', maxHeight: '240px', overflowY: 'auto', backgroundColor: '#ffffff' }}>
-                    <MarkdownContent content={lessonContent} />
+                {/* Sección 2: Contenido de la Lección (Markdown + KaTeX) */}
+                <div className="assessment-edit-section">
+                  <div className="assessment-edit-section-title-group" style={{ marginBottom: '12px' }}>
+                    <span className="assessment-edit-section-icon">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="16 18 22 12 16 6"></polyline>
+                        <polyline points="8 6 2 12 8 18"></polyline>
+                      </svg>
+                    </span>
+                    <div style={{ flex: 1 }}>
+                      <h4 className="assessment-edit-section-title">Contenido de la Lección</h4>
+                      <div className="assessment-edit-section-subtitle">Markdown + KaTeX para textos y fórmulas matemáticas</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button
+                        type="button"
+                        className={lessonTab === 'edit' ? 'btn-primary' : 'btn-secondary'}
+                        style={{ padding: '4px 12px', fontSize: '0.8rem', borderRadius: '6px' }}
+                        onClick={() => setLessonTab('edit')}
+                      >
+                        Editar
+                      </button>
+                      <button
+                        type="button"
+                        className={lessonTab === 'preview' ? 'btn-primary' : 'btn-secondary'}
+                        style={{ padding: '4px 12px', fontSize: '0.8rem', borderRadius: '6px' }}
+                        onClick={() => setLessonTab('preview')}
+                      >
+                        Vista previa
+                      </button>
+                    </div>
                   </div>
-                )}
+
+                  {lessonTab === 'edit' ? (
+                    <div className="assessment-edit-field">
+                      <textarea
+                        id="lesson-content-input"
+                        className="assessment-edit-textarea"
+                        rows={8}
+                        placeholder="Escribe el contenido en Markdown. Ej: # Título&#10;&#10;Fórmula: $x + 2 = 5$&#10;&#10;$$&#10;x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}&#10;$$"
+                        value={lessonContent}
+                        onChange={(e) => setLessonContent(e.target.value)}
+                        disabled={lessonSubmitting}
+                        style={{ fontFamily: 'monospace', fontSize: '0.9rem' }}
+                      />
+                    </div>
+                  ) : (
+                    <div style={{ border: '1px solid var(--color-border)', borderRadius: '8px', padding: '16px', minHeight: '180px', maxHeight: '300px', overflowY: 'auto', backgroundColor: '#ffffff' }}>
+                      <MarkdownContent content={lessonContent} />
+                    </div>
+                  )}
+                </div>
+
+                {/* Sección 3: Disponibilidad */}
+                <div className="assessment-edit-section">
+                  <div className="assessment-edit-section-title-group">
+                    <span className="assessment-edit-section-icon">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                        <circle cx="12" cy="12" r="3"></circle>
+                      </svg>
+                    </span>
+                    <div>
+                      <h4 className="assessment-edit-section-title">Disponibilidad</h4>
+                      <div className="assessment-edit-section-subtitle">Visibilidad para los alumnos matriculados</div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem' }}>
+                      <input
+                        type="radio"
+                        name="lessonPublishOption"
+                        value="draft"
+                        checked={lessonPublishOption === 'draft'}
+                        onChange={() => setLessonPublishOption('draft')}
+                        disabled={lessonSubmitting}
+                      />
+                      <span>Guardar como borrador (no visible para alumnos)</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem' }}>
+                      <input
+                        type="radio"
+                        name="lessonPublishOption"
+                        value="now"
+                        checked={lessonPublishOption === 'now'}
+                        onChange={() => setLessonPublishOption('now')}
+                        disabled={lessonSubmitting}
+                      />
+                      <span>Publicar inmediatamente</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem' }}>
+                      <input
+                        type="radio"
+                        name="lessonPublishOption"
+                        value="scheduled"
+                        checked={lessonPublishOption === 'scheduled'}
+                        onChange={() => setLessonPublishOption('scheduled')}
+                        disabled={lessonSubmitting}
+                      />
+                      <span>Programar publicación</span>
+                    </label>
+                  </div>
+
+                  {lessonPublishOption === 'scheduled' && (
+                    <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
+                      <div style={{ flex: 1 }}>
+                        <label className="assessment-edit-label" htmlFor="lesson-scheduled-date" style={{ fontSize: '0.8rem' }}>
+                          Fecha de publicación
+                        </label>
+                        <input
+                          id="lesson-scheduled-date"
+                          type="date"
+                          className="assessment-edit-input"
+                          value={lessonScheduledDate}
+                          onChange={(e) => setLessonScheduledDate(e.target.value)}
+                          disabled={lessonSubmitting}
+                          required
+                        />
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label className="assessment-edit-label" htmlFor="lesson-scheduled-time" style={{ fontSize: '0.8rem' }}>
+                          Hora de publicación
+                        </label>
+                        <input
+                          id="lesson-scheduled-time"
+                          type="time"
+                          className="assessment-edit-input"
+                          value={lessonScheduledTime}
+                          onChange={(e) => setLessonScheduledTime(e.target.value)}
+                          disabled={lessonSubmitting}
+                          required
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <input
-                  id="lesson-published-checkbox"
-                  type="checkbox"
-                  checked={lessonIsPublished}
-                  onChange={(e) => setLessonIsPublished(e.target.checked)}
-                  disabled={lessonSubmitting}
-                />
-                <label htmlFor="lesson-published-checkbox" style={{ fontSize: '0.9rem', color: 'var(--color-text)', cursor: 'pointer' }}>
-                  Publicada (visible para alumnos)
-                </label>
-              </div>
-
-              <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
+              {/* Footer Sticky */}
+              <div className="assessment-edit-modal-footer">
                 <button
                   type="button"
                   className="btn-secondary"
-                  style={{ flex: 1 }}
                   onClick={() => setIsLessonModalOpen(false)}
                   disabled={lessonSubmitting}
                 >
@@ -2418,7 +3176,6 @@ export const CourseDetailPage: React.FC = () => {
                   type="submit"
                   id="btn-save-lesson"
                   className="btn-primary"
-                  style={{ flex: 1 }}
                   disabled={lessonSubmitting}
                 >
                   {lessonSubmitting ? 'Guardando...' : 'Guardar lección'}
@@ -2429,259 +3186,411 @@ export const CourseDetailPage: React.FC = () => {
         </div>
       )}
 
-      {/* Modal para Crear Nueva Evaluación (QA-005) */}
+      {/* Modal Premium para Crear Nueva Evaluación (QA-008-AJ.3) */}
       {isCreateAssModalOpen && (
         <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 100,
-            padding: '16px',
+          className="assessment-edit-modal-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsCreateAssModalOpen(false);
           }}
         >
-          <div
-            className="dashboard-card"
-            style={{
-              width: '100%',
-              maxWidth: '620px',
-              maxHeight: '90vh',
-              overflowY: 'auto',
-              backgroundColor: 'var(--color-surface, #ffffff)',
-              borderRadius: '12px',
-              padding: '28px',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
-            }}
-          >
-            <h3 style={{ marginBottom: '20px', fontSize: '1.25rem', fontWeight: 700, borderBottom: '1px solid #e5e7eb', paddingBottom: '12px' }}>
-              ✨ Nueva Evaluación
-            </h3>
-
-            {createAssError && (
-              <div className="alert alert-error" style={{ marginBottom: '20px' }}>
-                {createAssError}
-              </div>
-            )}
-
-            <form onSubmit={handleCreateAssessmentSubmit}>
-              {/* Sección 1: Información General */}
-              <div style={{ marginBottom: '22px', backgroundColor: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#334155', marginBottom: '14px' }}>
-                  📝 Información General
-                </h4>
-
-                <div style={{ marginBottom: '14px' }}>
-                  <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.875rem' }}>
-                    Título de la Evaluación *
-                  </label>
-                  <input
-                    type="text"
-                    className="input-field"
-                    placeholder="ej. Examen Parcial I - Unidad 1"
-                    value={createAssTitle}
-                    onChange={(e) => setCreateAssTitle(e.target.value)}
-                    required
-                  />
+          <div className="assessment-edit-modal-card">
+            {/* Header del Modal */}
+            <div className="assessment-edit-modal-header">
+              <div className="assessment-edit-modal-header-left">
+                <div className="assessment-edit-modal-header-icon">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+                  </svg>
                 </div>
-
-                <div style={{ marginBottom: '14px' }}>
-                  <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.875rem' }}>
-                    Descripción / Instrucciones
-                  </label>
-                  <textarea
-                    className="input-field"
-                    rows={3}
-                    placeholder="Instrucciones para los estudiantes antes de comenzar..."
-                    value={createAssDescription}
-                    onChange={(e) => setCreateAssDescription(e.target.value)}
-                  />
-                </div>
-
                 <div>
-                  <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.875rem' }}>
-                    Tipo de Evaluación *
-                  </label>
-                  <select
-                    className="input-field"
-                    value={createAssType}
-                    onChange={(e) => setCreateAssType(e.target.value as AssessmentType)}
-                  >
-                    <option value="EXAM">Examen 📝</option>
-                    <option value="QUIZ">Cuestionario ❓</option>
-                    <option value="DIAGNOSTIC">Diagnóstico 🔍</option>
-                    <option value="PRACTICE">Práctica 🏋️</option>
-                    <option value="FINAL">Evaluación Final 🎓</option>
-                  </select>
+                  <h3 className="assessment-edit-modal-title">Nueva Evaluación</h3>
+                  <p className="assessment-edit-modal-subtitle">Configura la evaluación y asigna su ubicación para tus estudiantes</p>
                 </div>
               </div>
+              <button
+                type="button"
+                className="assessment-edit-modal-close"
+                onClick={() => setIsCreateAssModalOpen(false)}
+                aria-label="Cerrar modal"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
 
-              {/* Sección 2: Calificación y Ponderación */}
-              <div style={{ marginBottom: '22px', backgroundColor: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#334155', marginBottom: '14px' }}>
-                  📊 Calificación y Ponderación
-                </h4>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-                  <div>
-                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '4px', fontSize: '0.875rem' }}>
-                      Ponderación (%) *
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.1"
-                      className="input-field"
-                      value={createAssWeight}
-                      onChange={(e) => setCreateAssWeight(e.target.value)}
-                      required
-                    />
-                    <small style={{ color: '#64748b', fontSize: '0.75rem', display: 'block', marginTop: '4px' }}>
-                      Porcentaje de la calificación final que representa.
-                    </small>
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '4px', fontSize: '0.875rem' }}>
-                      Calificación Aprobatoria (%)
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      placeholder="ej. 60"
-                      className="input-field"
-                      value={createAssPassingScore}
-                      onChange={(e) => setCreateAssPassingScore(e.target.value)}
-                    />
-                    <small style={{ color: '#64748b', fontSize: '0.75rem', display: 'block', marginTop: '4px' }}>
-                      Porcentaje mínimo para aprobar (opcional).
-                    </small>
-                  </div>
-                </div>
-              </div>
-
-              {/* Sección 3: Tiempo e Intentos */}
-              <div style={{ marginBottom: '22px', backgroundColor: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#334155', marginBottom: '14px' }}>
-                  ⏱️ Tiempo e Intentos
-                </h4>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                  <div>
-                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.875rem' }}>
-                      Tiempo Límite (minutos)
-                    </label>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                      <input
-                        type="checkbox"
-                        id="createAssUnlimitedTime"
-                        checked={createAssUnlimitedTime}
-                        onChange={(e) => setCreateAssUnlimitedTime(e.target.checked)}
-                      />
-                      <label htmlFor="createAssUnlimitedTime" style={{ fontSize: '0.85rem', cursor: 'pointer' }}>
-                        Sin límite de tiempo
-                      </label>
-                    </div>
-                    {!createAssUnlimitedTime && (
-                      <input
-                        type="number"
-                        min="1"
-                        placeholder="Minutos"
-                        className="input-field"
-                        value={createAssTimeLimit}
-                        onChange={(e) => setCreateAssTimeLimit(e.target.value)}
-                      />
-                    )}
-                    <small style={{ color: '#64748b', fontSize: '0.75rem', display: 'block', marginTop: '4px' }}>
-                      {createAssUnlimitedTime ? 'El estudiante dispone de tiempo ilimitado para responder.' : 'Se enviará automáticamente al terminar el tiempo.'}
-                    </small>
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.875rem' }}>
-                      Intentos Máximos
-                    </label>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                      <input
-                        type="checkbox"
-                        id="createAssUnlimitedAttempts"
-                        checked={createAssUnlimitedAttempts}
-                        onChange={(e) => setCreateAssUnlimitedAttempts(e.target.checked)}
-                      />
-                      <label htmlFor="createAssUnlimitedAttempts" style={{ fontSize: '0.85rem', cursor: 'pointer' }}>
-                        Intentos ilimitados
-                      </label>
-                    </div>
-                    {!createAssUnlimitedAttempts && (
-                      <input
-                        type="number"
-                        min="1"
-                        placeholder="Cantidad de intentos"
-                        className="input-field"
-                        value={createAssMaxAttempts}
-                        onChange={(e) => setCreateAssMaxAttempts(e.target.value)}
-                      />
-                    )}
-                    <small style={{ color: '#64748b', fontSize: '0.75rem', display: 'block', marginTop: '4px' }}>
-                      {createAssUnlimitedAttempts ? 'El estudiante podrá realizar intentos sin límite.' : 'Límite máximo de intentos permitidos.'}
-                    </small>
-                  </div>
-                </div>
-              </div>
-
-              {/* Sección 4: Disponibilidad */}
-              <div style={{ marginBottom: '24px', backgroundColor: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#334155', marginBottom: '14px' }}>
-                  📅 Disponibilidad (Ventana de Fechas)
-                </h4>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-                  <div>
-                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.85rem' }}>
-                      Disponible Desde
-                    </label>
-                    <input
-                      type="datetime-local"
-                      className="input-field"
-                      value={createAssAvailableFrom}
-                      onChange={(e) => setCreateAssAvailableFrom(e.target.value)}
-                    />
-                    <small style={{ color: '#64748b', fontSize: '0.75rem', display: 'block', marginTop: '4px' }}>
-                      Apertura para iniciar nuevos intentos.
-                    </small>
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.85rem' }}>
-                      Disponible Hasta
-                    </label>
-                    <input
-                      type="datetime-local"
-                      className="input-field"
-                      value={createAssAvailableUntil}
-                      onChange={(e) => setCreateAssAvailableUntil(e.target.value)}
-                    />
-                    <small style={{ color: '#64748b', fontSize: '0.75rem', display: 'block', marginTop: '4px' }}>
-                      Cierre para iniciar nuevos intentos.
-                    </small>
-                  </div>
-                </div>
-
-                {!createAssAvailableFrom && !createAssAvailableUntil && (
-                  <div style={{ marginTop: '10px', fontSize: '0.8rem', color: '#0369a1', backgroundColor: '#e0f2fe', padding: '6px 12px', borderRadius: '6px' }}>
-                    ℹ️ Disponible sin ventana de fechas.
+            {/* Form & Body */}
+            <form onSubmit={handleCreateAssessmentSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+              <div className="assessment-edit-modal-body">
+                {createAssError && (
+                  <div className="alert alert-error" style={{ marginBottom: '0' }}>
+                    {createAssError}
                   </div>
                 )}
+
+                {/* Sección 1: Información General */}
+                <div className="assessment-edit-section">
+                  <div className="assessment-edit-section-title-group">
+                    <span className="assessment-edit-section-icon">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                      </svg>
+                    </span>
+                    <div>
+                      <h4 className="assessment-edit-section-title">Información General</h4>
+                      <div className="assessment-edit-section-subtitle">Datos principales que identifican la evaluación</div>
+                    </div>
+                  </div>
+
+                  <div className="assessment-edit-field">
+                    <label className="assessment-edit-label">
+                      <span>Título de la Evaluación <span className="assessment-edit-label-required">*</span></span>
+                    </label>
+                    <input
+                      type="text"
+                      className="assessment-edit-input"
+                      placeholder="Ej. Examen Parcial I - Unidad 1"
+                      value={createAssTitle}
+                      onChange={(e) => setCreateAssTitle(e.target.value)}
+                      required
+                    />
+                  </div>
+
+                  <div className="assessment-edit-field">
+                    <label className="assessment-edit-label">Descripción / Instrucciones</label>
+                    <textarea
+                      className="assessment-edit-textarea"
+                      rows={3}
+                      placeholder="Instrucciones para los estudiantes antes de comenzar..."
+                      value={createAssDescription}
+                      onChange={(e) => setCreateAssDescription(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="assessment-edit-grid-2">
+                    <div className="assessment-edit-field">
+                      <label className="assessment-edit-label">
+                        <span>Tipo de Evaluación <span className="assessment-edit-label-required">*</span></span>
+                      </label>
+                      <div className="assessment-edit-select-wrapper">
+                        <select
+                          className="assessment-edit-select"
+                          value={createAssType}
+                          onChange={(e) => setCreateAssType(e.target.value as AssessmentType)}
+                        >
+                          <option value="EXAM">Examen</option>
+                          <option value="QUIZ">Cuestionario</option>
+                          <option value="DIAGNOSTIC">Diagnóstico</option>
+                          <option value="PRACTICE">Práctica</option>
+                          <option value="FINAL">Evaluación Final</option>
+                          <option value="CROSSWORD">Crucigrama</option>
+                        </select>
+                        <span className="assessment-edit-select-chevron">
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                          </svg>
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="assessment-edit-field">
+                      <label className="assessment-edit-label">Ubicación de la Evaluación</label>
+                      <div className="assessment-edit-select-wrapper">
+                        <select
+                          className="assessment-edit-select"
+                          value={createAssModuleId || ''}
+                          onChange={(e) => setCreateAssModuleId(e.target.value || null)}
+                        >
+                          <option value="">Evaluación global del curso</option>
+                          {courseContent?.modules?.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              Módulo: {m.title}
+                            </option>
+                          ))}
+                        </select>
+                        <span className="assessment-edit-select-chevron">
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                          </svg>
+                        </span>
+                      </div>
+                      <div className="assessment-edit-help-text">Si seleccionas un módulo, la evaluación pertenecerá a ese módulo. Si eliges "global", pertenecerá al curso completo.</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sección 2: Calificación y Ponderación */}
+                <div className="assessment-edit-section">
+                  <div className="assessment-edit-section-title-group">
+                    <span className="assessment-edit-section-icon">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="20" x2="18" y2="10"></line>
+                        <line x1="12" y1="20" x2="12" y2="4"></line>
+                        <line x1="6" y1="20" x2="6" y2="14"></line>
+                      </svg>
+                    </span>
+                    <div>
+                      <h4 className="assessment-edit-section-title">Calificación y Ponderación</h4>
+                      <div className="assessment-edit-section-subtitle">Configuración del impacto en el libro de calificaciones</div>
+                    </div>
+                  </div>
+
+                  <div className="assessment-edit-grid-2">
+                    <div className="assessment-edit-field">
+                      <label className="assessment-edit-label">
+                        <span>Ponderación (%) <span className="assessment-edit-label-required">*</span></span>
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        className="assessment-edit-input"
+                        value={createAssWeight}
+                        onChange={(e) => setCreateAssWeight(e.target.value)}
+                        required
+                      />
+                      <div className="assessment-edit-help-text">Porcentaje de la calificación final del curso.</div>
+                    </div>
+
+                    <div className="assessment-edit-field">
+                      <label className="assessment-edit-label">Calificación Aprobatoria (%)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        placeholder="ej. 60"
+                        className="assessment-edit-input"
+                        value={createAssPassingScore}
+                        onChange={(e) => setCreateAssPassingScore(e.target.value)}
+                      />
+                      <div className="assessment-edit-help-text">Porcentaje mínimo para aprobar (opcional).</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sección 3: Tiempo e Intentos */}
+                <div className="assessment-edit-section">
+                  <div className="assessment-edit-section-title-group">
+                    <span className="assessment-edit-section-icon">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <polyline points="12 6 12 12 16 14"></polyline>
+                      </svg>
+                    </span>
+                    <div>
+                      <h4 className="assessment-edit-section-title">Tiempo e Intentos</h4>
+                      <div className="assessment-edit-section-subtitle">Reglas de resolución para el estudiante</div>
+                    </div>
+                  </div>
+
+                  <div className="assessment-edit-grid-2">
+                    <div className="assessment-edit-field">
+                      <label className="assessment-edit-label">Tiempo Límite (minutos)</label>
+                      <div className={`assessment-edit-checkbox-card ${createAssUnlimitedTime ? 'is-checked' : ''}`}>
+                        <input
+                          type="checkbox"
+                          id="createAssUnlimitedTime"
+                          className="assessment-edit-checkbox-input"
+                          checked={createAssUnlimitedTime}
+                          onChange={(e) => setCreateAssUnlimitedTime(e.target.checked)}
+                        />
+                        <label htmlFor="createAssUnlimitedTime" className="assessment-edit-checkbox-label-text">
+                          Sin límite de tiempo
+                        </label>
+                      </div>
+                      {!createAssUnlimitedTime && (
+                        <input
+                          type="number"
+                          min="1"
+                          placeholder="Minutos"
+                          className="assessment-edit-input"
+                          value={createAssTimeLimit}
+                          onChange={(e) => setCreateAssTimeLimit(e.target.value)}
+                        />
+                      )}
+                      <div className="assessment-edit-help-text">
+                        {createAssUnlimitedTime ? 'El estudiante dispone de tiempo ilimitado para responder.' : 'Se enviará automáticamente al finalizar el tiempo.'}
+                      </div>
+                    </div>
+
+                    <div className="assessment-edit-field">
+                      <label className="assessment-edit-label">Intentos Máximos</label>
+                      <div className={`assessment-edit-checkbox-card ${createAssUnlimitedAttempts ? 'is-checked' : ''}`}>
+                        <input
+                          type="checkbox"
+                          id="createAssUnlimitedAttempts"
+                          className="assessment-edit-checkbox-input"
+                          checked={createAssUnlimitedAttempts}
+                          onChange={(e) => setCreateAssUnlimitedAttempts(e.target.checked)}
+                        />
+                        <label htmlFor="createAssUnlimitedAttempts" className="assessment-edit-checkbox-label-text">
+                          Intentos ilimitados
+                        </label>
+                      </div>
+                      {!createAssUnlimitedAttempts && (
+                        <input
+                          type="number"
+                          min="1"
+                          placeholder="Cantidad de intentos"
+                          className="assessment-edit-input"
+                          value={createAssMaxAttempts}
+                          onChange={(e) => setCreateAssMaxAttempts(e.target.value)}
+                        />
+                      )}
+                      <div className="assessment-edit-help-text">
+                        {createAssUnlimitedAttempts ? 'El estudiante podrá realizar intentos sin límite.' : 'Límite máximo de intentos permitidos por alumno.'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sección 4: Disponibilidad */}
+                <div className="assessment-edit-section">
+                  <div className="assessment-edit-section-title-group">
+                    <span className="assessment-edit-section-icon">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                        <line x1="16" y1="2" x2="16" y2="6"></line>
+                        <line x1="8" y1="2" x2="8" y2="6"></line>
+                        <line x1="3" y1="10" x2="21" y2="10"></line>
+                      </svg>
+                    </span>
+                    <div>
+                      <h4 className="assessment-edit-section-title">Disponibilidad (Ventana de Fechas)</h4>
+                      <div className="assessment-edit-section-subtitle">Programación de acceso para iniciar intentos</div>
+                    </div>
+                  </div>
+
+                  <div className="assessment-edit-grid-2">
+                    <div className="assessment-edit-field">
+                      <label className="assessment-edit-label">Disponible Desde</label>
+                      <input
+                        type="datetime-local"
+                        className="assessment-edit-input"
+                        value={createAssAvailableFrom}
+                        onChange={(e) => setCreateAssAvailableFrom(e.target.value)}
+                      />
+                      <div className="assessment-edit-help-text">Apertura para iniciar nuevos intentos.</div>
+                    </div>
+
+                    <div className="assessment-edit-field">
+                      <label className="assessment-edit-label">Disponible Hasta</label>
+                      <input
+                        type="datetime-local"
+                        className="assessment-edit-input"
+                        value={createAssAvailableUntil}
+                        onChange={(e) => setCreateAssAvailableUntil(e.target.value)}
+                      />
+                      <div className="assessment-edit-help-text">Cierre para iniciar nuevos intentos.</div>
+                    </div>
+                  </div>
+
+                  {!createAssAvailableFrom && !createAssAvailableUntil && (
+                    <div className="assessment-edit-info-banner">
+                      <span className="assessment-edit-info-banner-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="16" x2="12" y2="12"></line>
+                          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                      </span>
+                      <div>
+                        <div className="assessment-edit-info-banner-title">Disponible inmediatamente</div>
+                        <div className="assessment-edit-info-banner-desc">Los estudiantes pueden acceder en cualquier momento sin restricciones de fecha.</div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Sección 5: Publicación Programada */}
+                <div className="assessment-edit-section">
+                  <div className="assessment-edit-section-title-group">
+                    <span className="assessment-edit-section-icon">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <polyline points="12 6 12 12 16 14"></polyline>
+                      </svg>
+                    </span>
+                    <div>
+                      <h4 className="assessment-edit-section-title">Publicación de la Evaluación</h4>
+                      <div className="assessment-edit-section-subtitle">Estado inicial y fecha de visibilidad para los alumnos</div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem' }}>
+                      <input
+                        type="radio"
+                        name="createAssPublishOption"
+                        value="draft"
+                        checked={createAssPublishOption === 'draft'}
+                        onChange={() => setCreateAssPublishOption('draft')}
+                      />
+                      <span>Guardar como borrador (no visible para alumnos)</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem' }}>
+                      <input
+                        type="radio"
+                        name="createAssPublishOption"
+                        value="now"
+                        checked={createAssPublishOption === 'now'}
+                        onChange={() => setCreateAssPublishOption('now')}
+                      />
+                      <span>Publicar inmediatamente</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem' }}>
+                      <input
+                        type="radio"
+                        name="createAssPublishOption"
+                        value="scheduled"
+                        checked={createAssPublishOption === 'scheduled'}
+                        onChange={() => setCreateAssPublishOption('scheduled')}
+                      />
+                      <span>Programar publicación</span>
+                    </label>
+                  </div>
+
+                  {createAssPublishOption === 'scheduled' && (
+                    <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
+                      <div style={{ flex: 1 }}>
+                        <label className="assessment-edit-label" htmlFor="create-ass-scheduled-date" style={{ fontSize: '0.8rem' }}>
+                          Fecha de publicación
+                        </label>
+                        <input
+                          id="create-ass-scheduled-date"
+                          type="date"
+                          className="assessment-edit-input"
+                          value={createAssScheduledDate}
+                          onChange={(e) => setCreateAssScheduledDate(e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label className="assessment-edit-label" htmlFor="create-ass-scheduled-time" style={{ fontSize: '0.8rem' }}>
+                          Hora de publicación
+                        </label>
+                        <input
+                          id="create-ass-scheduled-time"
+                          type="time"
+                          className="assessment-edit-input"
+                          value={createAssScheduledTime}
+                          onChange={(e) => setCreateAssScheduledTime(e.target.value)}
+                          required
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', paddingTop: '12px', borderTop: '1px solid #e5e7eb' }}>
+              {/* Footer Fijo */}
+              <div className="assessment-edit-modal-footer">
                 <button
                   type="button"
                   className="btn btn-secondary"
@@ -2699,6 +3608,118 @@ export const CourseDetailPage: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Premium: Programación Batch de Módulo (QA-008-AK.3) */}
+      {scheduleBatchModuleTarget && courseId && (
+        <ScheduleModuleModal
+          isOpen={Boolean(scheduleBatchModuleTarget)}
+          onClose={() => setScheduleBatchModuleTarget(null)}
+          courseId={courseId}
+          module={scheduleBatchModuleTarget}
+          assessments={assessments}
+          onSuccess={async () => {
+            await fetchCourseContentData();
+            const assessmentsData = await AssessmentServiceAPI.getCourseAssessments(courseId);
+            setAssessments(assessmentsData);
+          }}
+        />
+      )}
+
+      {/* Modal Premium: Publicación Inmediata Selectiva (QA-008-AK.3) */}
+      {publishNowModuleTarget && courseId && (
+        <PublishModuleNowModal
+          isOpen={Boolean(publishNowModuleTarget)}
+          onClose={() => setPublishNowModuleTarget(null)}
+          courseId={courseId}
+          module={publishNowModuleTarget}
+          assessments={assessments}
+          onSuccess={async () => {
+            await fetchCourseContentData();
+            const assessmentsData = await AssessmentServiceAPI.getCourseAssessments(courseId);
+            setAssessments(assessmentsData);
+          }}
+        />
+      )}
+
+      {/* Modal Confirmación: Cancelar Programación del Módulo (QA-008-AK.3) */}
+      {cancelScheduleModuleTarget && (
+        <div
+          className="modal-overlay"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.65)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '16px',
+          }}
+          onClick={() => setCancelScheduleModuleTarget(null)}
+        >
+          <div
+            className="modal-card"
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: 'var(--radius-lg, 16px)',
+              boxShadow: 'var(--shadow-lg, 0 20px 25px -5px rgba(0, 0, 0, 0.1))',
+              width: '100%',
+              maxWidth: '500px',
+              padding: '24px',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+              <div
+                style={{
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '10px',
+                  backgroundColor: '#fef2f2',
+                  color: '#dc2626',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '1.2rem',
+                }}
+              >
+                🚫
+              </div>
+              <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--color-text, #1e293b)', margin: 0 }}>
+                Cancelar programación
+              </h3>
+            </div>
+
+            <p style={{ fontSize: '0.9rem', color: 'var(--color-muted, #64748b)', lineHeight: '1.5', marginBottom: '20px' }}>
+              Esto cancelará las publicaciones futuras pendientes para el módulo <strong>"{cancelScheduleModuleTarget.title}"</strong> y sus contenidos programados. El contenido que ya haya sido publicado no se ocultará ni se despublicará.
+            </p>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setCancelScheduleModuleTarget(null)}
+                disabled={cancellingModuleSchedule}
+              >
+                Volver
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                style={{ width: 'auto', backgroundColor: '#dc2626', borderColor: '#dc2626' }}
+                onClick={handleConfirmCancelModuleSchedule}
+                disabled={cancellingModuleSchedule}
+              >
+                {cancellingModuleSchedule ? 'Cancelando...' : 'Confirmar cancelación'}
+              </button>
+            </div>
           </div>
         </div>
       )}

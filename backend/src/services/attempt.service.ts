@@ -4,6 +4,8 @@ import { prisma } from '../lib/prisma';
 import { AuthError } from '../types/auth.types';
 import { GradebookService } from './gradebook.service';
 import { AssessmentService } from './assessment.service';
+import { NotificationService } from './notification.service';
+import { normalizeCrosswordAnswer } from '../utils/crossword-generator.util';
 import {
   AttemptDTO,
   SaveAnswerInput,
@@ -99,7 +101,30 @@ export class AttemptService {
       });
 
       if (activeAttempt) {
-        return this.mapToDTO(activeAttempt, Role.STUDENT);
+        const assessment = activeAttempt.assessment;
+        if (assessment.timeLimitMinutes !== null && assessment.timeLimitMinutes !== undefined) {
+          const now = new Date();
+          const startedAtTime = new Date(activeAttempt.startedAt).getTime();
+          const hardExpirationTime = startedAtTime + assessment.timeLimitMinutes * 60 * 1000;
+          const submitDeadlineTime = hardExpirationTime + 30 * 1000; // +30s grace period
+
+          if (now.getTime() > submitDeadlineTime) {
+            // Attempt is expired. Auto-grade and complete it inside this transaction:
+            await tx.attempt.update({
+              where: { id: activeAttempt.id },
+              data: {
+                submittedAt: now,
+                updatedAt: now,
+              },
+            });
+            await this.executeAutoGradeInTx(tx, activeAttempt.id, studentId, Role.STUDENT, now);
+            // Do not return activeAttempt. Fallthrough to check maxAttempts and create a new attempt if allowed.
+          } else {
+            return this.mapToDTO(activeAttempt, Role.STUDENT);
+          }
+        } else {
+          return this.mapToDTO(activeAttempt, Role.STUDENT);
+        }
       }
 
       // 3. Locate assessment and course to validate rules
@@ -148,19 +173,32 @@ export class AttemptService {
         throw new AuthError('La evaluación ha cerrado su periodo de disponibilidad', 400, 'ASSESSMENT_CLOSED');
       }
 
-      // 9. Validate maxAttempts (Count only SUBMITTED or GRADED attempts)
+      // 9. Validate maxAttempts (Count SUBMITTED, GRADED, or ABANDONED attempts against effectiveMaxAttempts)
       if (assessment.maxAttempts !== null) {
         const completedAttemptsCount = await tx.attempt.count({
           where: {
             studentId,
             assessmentId,
             status: {
-              in: ['SUBMITTED', 'GRADED'],
+              in: ['SUBMITTED', 'GRADED', 'ABANDONED'],
             },
           },
         });
 
-        if (completedAttemptsCount >= assessment.maxAttempts) {
+        const grantsAgg = await tx.assessmentAttemptGrant.aggregate({
+          where: {
+            studentId,
+            assessmentId,
+          },
+          _sum: {
+            quantity: true,
+          },
+        });
+
+        const additionalAttemptsGranted = grantsAgg._sum.quantity || 0;
+        const effectiveMaxAttempts = assessment.maxAttempts + additionalAttemptsGranted;
+
+        if (completedAttemptsCount >= effectiveMaxAttempts) {
           throw new AuthError('Has alcanzado el límite máximo de intentos permitidos para esta evaluación', 400, 'MAX_ATTEMPTS_REACHED');
         }
       }
@@ -263,6 +301,17 @@ export class AttemptService {
       if (attempt.studentId !== userId) {
         throw new AuthError('Acceso denegado: no puedes acceder a intentos de otros estudiantes', 403, 'FORBIDDEN');
       }
+      const enrollment = await prisma.enrollment.findUnique({
+        where: {
+          courseId_studentId: {
+            courseId: attempt.assessment.courseId,
+            studentId: userId,
+          },
+        },
+      });
+      if (!enrollment || enrollment.status !== EnrollmentStatus.ACTIVE) {
+        throw new AuthError('Acceso denegado: no estás inscrito activamente en este curso', 403, 'FORBIDDEN');
+      }
     } else if (userRole === Role.TEACHER) {
       const assignment = await prisma.courseTeacher.findUnique({
         where: {
@@ -311,9 +360,22 @@ export class AttemptService {
         throw new AuthError('Intento no encontrado', 404, 'ATTEMPT_NOT_FOUND');
       }
 
-      // 3. Validate Student Ownership
+      // 3. Validate Student Ownership & Active Enrollment
       if (attempt.studentId !== studentId) {
         throw new AuthError('Acceso denegado: este intento no te pertenece', 403, 'ATTEMPT_ACCESS_DENIED');
+      }
+
+      const enrollment = await tx.enrollment.findUnique({
+        where: {
+          courseId_studentId: {
+            courseId: attempt.assessment.courseId,
+            studentId,
+          },
+        },
+      });
+
+      if (!enrollment || enrollment.status !== EnrollmentStatus.ACTIVE) {
+        throw new AuthError('Acceso denegado: no estás inscrito activamente en este curso', 403, 'ENROLLMENT_REQUIRED');
       }
 
       // 4. Validate Attempt Status (Must be IN_PROGRESS)
@@ -378,7 +440,7 @@ export class AttemptService {
           attemptId,
           questionId,
           numericValue: question.type === QuestionType.NUMERIC ? parsed.numericValue : null,
-          textValue: question.type === QuestionType.OPEN_TEXT ? parsed.textValue : null,
+          textValue: (question.type === QuestionType.OPEN_TEXT || question.type === QuestionType.CROSSWORD_CLUE) ? parsed.textValue : null,
           pointsEarned: null,
           isCorrect: null,
           feedback: null,
@@ -386,7 +448,7 @@ export class AttemptService {
         },
         update: {
           numericValue: question.type === QuestionType.NUMERIC ? parsed.numericValue : null,
-          textValue: question.type === QuestionType.OPEN_TEXT ? parsed.textValue : null,
+          textValue: (question.type === QuestionType.OPEN_TEXT || question.type === QuestionType.CROSSWORD_CLUE) ? parsed.textValue : null,
           pointsEarned: null,
           isCorrect: null,
           feedback: null,
@@ -529,10 +591,10 @@ export class AttemptService {
       return { numericValue: numericValue ?? null };
     }
 
-    if (questionType === QuestionType.OPEN_TEXT) {
+    if (questionType === QuestionType.OPEN_TEXT || questionType === QuestionType.CROSSWORD_CLUE) {
       if ((optionIds !== undefined && Array.isArray(optionIds) && optionIds.length > 0) || (numericValue !== undefined && numericValue !== null)) {
         throw new AuthError(
-          'Tipos de datos incompatibles para la pregunta OPEN_TEXT',
+          `Tipos de datos incompatibles para la pregunta ${questionType}`,
           400,
           'QUESTION_TYPE_MISMATCH'
         );
@@ -592,9 +654,22 @@ export class AttemptService {
           throw new AuthError('Intento no encontrado', 404, 'ATTEMPT_NOT_FOUND');
         }
 
-        // 3. Authorization check
+        // 3. Authorization check & Active Enrollment
         if (attempt.studentId !== userId) {
           throw new AuthError('Acceso denegado: este intento no te pertenece', 403, 'ATTEMPT_ACCESS_DENIED');
+        }
+
+        const enrollment = await tx.enrollment.findUnique({
+          where: {
+            courseId_studentId: {
+              courseId: attempt.assessment.courseId,
+              studentId: userId,
+            },
+          },
+        });
+
+        if (!enrollment || enrollment.status !== EnrollmentStatus.ACTIVE) {
+          throw new AuthError('Acceso denegado: no estás inscrito activamente en este curso', 403, 'ENROLLMENT_REQUIRED');
         }
 
         // 4. Idempotency: If already GRADED or SUBMITTED, return mapped DTO
@@ -705,6 +780,239 @@ export class AttemptService {
       },
       { timeout: 20000, maxWait: 10000 }
     );
+  }
+
+  /**
+   * Abandons an IN_PROGRESS Attempt explicitly by a Student.
+   * Concurrency is protected using pg_advisory_xact_lock(attemptId).
+   * Consumes 1 attempt towards maxAttempts, preserves saved answers, but marks status = ABANDONED.
+   */
+  public static async abandonAttempt(
+    attemptId: string,
+    userId: string,
+    userRole: Role
+  ): Promise<AttemptDTO> {
+    if (userRole !== Role.STUDENT) {
+      throw new AuthError('Solo los estudiantes pueden abandonar sus intentos de evaluación', 403, 'ONLY_STUDENTS_CAN_ABANDON');
+    }
+
+    const [key1, key2] = this.getAttemptAdvisoryLockKeys(attemptId);
+
+    return await prisma.$transaction(
+      async (tx) => {
+        // 1. Transactional advisory lock for this attemptId
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${key1}, ${key2})`;
+
+        // 2. Fetch Attempt with Assessment and Answers
+        const attempt = await tx.attempt.findUnique({
+          where: { id: attemptId },
+          include: {
+            assessment: { include: { course: true } },
+            answers: { include: { answerOptions: true } },
+          },
+        });
+
+        if (!attempt) {
+          throw new AuthError('Intento no encontrado', 404, 'ATTEMPT_NOT_FOUND');
+        }
+
+        // 3. Authorization check & Active Enrollment
+        if (attempt.studentId !== userId) {
+          throw new AuthError('Acceso denegado: este intento no te pertenece', 403, 'ATTEMPT_ACCESS_DENIED');
+        }
+
+        const enrollment = await tx.enrollment.findUnique({
+          where: {
+            courseId_studentId: {
+              courseId: attempt.assessment.courseId,
+              studentId: userId,
+            },
+          },
+        });
+
+        if (!enrollment || enrollment.status !== EnrollmentStatus.ACTIVE) {
+          throw new AuthError('Acceso denegado: no estás inscrito activamente en este curso', 403, 'ENROLLMENT_REQUIRED');
+        }
+
+        // 4. Idempotency: If already ABANDONED, return mapped DTO
+        if (attempt.status === AttemptStatus.ABANDONED) {
+          return this.mapToDTO(attempt, Role.STUDENT);
+        }
+
+        // 5. Reject if already SUBMITTED or GRADED
+        if (attempt.status === AttemptStatus.SUBMITTED || attempt.status === AttemptStatus.GRADED) {
+          throw new AuthError('No se puede abandonar un intento que ya fue enviado o calificado', 400, 'INVALID_ATTEMPT_STATUS');
+        }
+
+        if (attempt.status !== AttemptStatus.IN_PROGRESS) {
+          throw new AuthError('El intento no se encuentra en progreso y no se puede abandonar', 400, 'INVALID_ATTEMPT_STATUS');
+        }
+
+        const now = new Date();
+
+        // 6. Update status = ABANDONED
+        const updatedAttempt = await tx.attempt.update({
+          where: { id: attemptId },
+          data: {
+            status: AttemptStatus.ABANDONED,
+            updatedAt: now,
+          },
+          include: {
+            assessment: {
+              include: {
+                assessmentQuestions: {
+                  orderBy: { order: 'asc' },
+                  include: {
+                    question: {
+                      include: {
+                        options: {
+                          orderBy: { order: 'asc' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            answers: {
+              include: {
+                answerOptions: true,
+              },
+            },
+          },
+        });
+
+        return this.mapToDTO(updatedAttempt, Role.STUDENT);
+      },
+      { timeout: 20000, maxWait: 10000 }
+    );
+  }
+
+  /**
+   * Realiza la validación en tiempo real y sanitizada del estado de las palabras de un crucigrama para el alumno.
+   * CERO LEAKAGE: Retorna únicamente un objeto sanitizado { validationMap: Record<questionId, 'CORRECT' | 'INCORRECT' | 'PENDING'> }.
+   * No expone respuestas correctas, answerNormalized, score ni puntos.
+   */
+  public static async checkCrosswordValidation(
+    attemptId: string,
+    studentId: string,
+    userRole: Role,
+    clientAnswersPayload?: Array<{ questionId: string; textValue: string }>
+  ): Promise<{ validationMap: Record<string, 'CORRECT' | 'INCORRECT' | 'PENDING'> }> {
+    if (userRole !== Role.STUDENT) {
+      throw new AuthError('Solo los estudiantes pueden solicitar validación interactiva', 403, 'ONLY_STUDENTS_CAN_CHECK');
+    }
+
+    const attempt = await prisma.attempt.findUnique({
+      where: { id: attemptId },
+      include: {
+        assessment: {
+          include: {
+            assessmentQuestions: {
+              include: {
+                question: {
+                  include: {
+                    options: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+        answers: true,
+      },
+    });
+
+    if (!attempt) {
+      throw new AuthError('Intento no encontrado', 404, 'ATTEMPT_NOT_FOUND');
+    }
+
+    if (attempt.studentId !== studentId) {
+      throw new AuthError('Acceso denegado: este intento no te pertenece', 403, 'ATTEMPT_ACCESS_DENIED');
+    }
+
+    const enrollment = await prisma.enrollment.findUnique({
+      where: {
+        courseId_studentId: {
+          courseId: attempt.assessment.courseId,
+          studentId,
+        },
+      },
+    });
+
+    if (!enrollment || enrollment.status !== EnrollmentStatus.ACTIVE) {
+      throw new AuthError('Acceso denegado: no estás inscrito activamente en este curso', 403, 'ENROLLMENT_REQUIRED');
+    }
+
+    if (attempt.status !== 'IN_PROGRESS') {
+      throw new AuthError('El intento no está en progreso', 400, 'ATTEMPT_NOT_IN_PROGRESS');
+    }
+
+    if (attempt.assessment.type !== 'CROSSWORD') {
+      throw new AuthError('Esta evaluación no es de tipo CROSSWORD', 400, 'ASSESSMENT_NOT_CROSSWORD');
+    }
+
+    if (attempt.assessment.timeLimitMinutes) {
+      const now = new Date();
+      const maxEndTime = new Date(attempt.startedAt.getTime() + (attempt.assessment.timeLimitMinutes * 60 + 30) * 1000);
+      if (now > maxEndTime) {
+        throw new AuthError('El tiempo límite de la evaluación ha transcurrido', 403, 'ATTEMPT_EXPIRED');
+      }
+    }
+
+    // Mapa de respuestas en caliente: BD + cliente
+    const latestAnswersMap = new Map<string, string>();
+    if (attempt.answers) {
+      attempt.answers.forEach((ans) => {
+        if (ans.textValue) {
+          latestAnswersMap.set(ans.questionId, ans.textValue);
+        }
+      });
+    }
+
+    if (Array.isArray(clientAnswersPayload)) {
+      clientAnswersPayload.forEach((item) => {
+        if (item && typeof item.questionId === 'string' && typeof item.textValue === 'string') {
+          latestAnswersMap.set(item.questionId, item.textValue);
+        }
+      });
+    }
+
+    const layoutAny = attempt.assessment.crosswordLayout as any;
+    const entries: Array<{ questionId: string; length: number }> = layoutAny?.entries || [];
+    const entryLengthMap = new Map<string, number>();
+    entries.forEach((e) => entryLengthMap.set(e.questionId, e.length));
+
+    const validationMap: Record<string, 'CORRECT' | 'INCORRECT' | 'PENDING'> = {};
+
+    for (const aq of attempt.assessment.assessmentQuestions) {
+      const q = aq.question;
+      if (q.type !== QuestionType.CROSSWORD_CLUE) continue;
+
+      const expectedLength = entryLengthMap.get(q.id) || 0;
+      const correctOption = q.options.find((o) => o.isCorrect) || q.options[0];
+
+      if (!correctOption || !correctOption.text || expectedLength === 0) {
+        validationMap[q.id] = 'PENDING';
+        continue;
+      }
+
+      const targetNormalized = normalizeCrosswordAnswer(correctOption.text);
+      const studentText = latestAnswersMap.get(q.id) || '';
+      const studentNormalized = normalizeCrosswordAnswer(studentText);
+
+      const targetLen = expectedLength || targetNormalized.length;
+
+      if (studentNormalized.length < targetLen) {
+        validationMap[q.id] = 'PENDING';
+      } else if (studentNormalized.length === targetLen && studentNormalized === targetNormalized) {
+        validationMap[q.id] = 'CORRECT';
+      } else {
+        validationMap[q.id] = 'INCORRECT';
+      }
+    }
+
+    return { validationMap };
   }
 
   /**
@@ -831,73 +1139,58 @@ export class AttemptService {
 
       if (q.type === QuestionType.MULTIPLE_CHOICE) {
         const correctOptions = q.options.filter((o) => o.isCorrect);
-        if (correctOptions.length !== 1) {
-          throw new AuthError(
-            `Configuración inválida en la pregunta MULTIPLE_CHOICE '${q.statement}': debe tener exactamente una opción correcta`,
-            400,
-            'QUESTION_INVALID_CONFIGURATION'
-          );
-        }
-        const correctOptId = correctOptions[0].id;
-        if (existingAns && existingAns.answerOptions && existingAns.answerOptions.length === 1) {
-          if (existingAns.answerOptions[0].optionId === correctOptId) {
-            isCorrect = true;
+        if (correctOptions.length === 1) {
+          const correctOptId = correctOptions[0].id;
+          if (existingAns && existingAns.answerOptions && existingAns.answerOptions.length === 1) {
+            if (existingAns.answerOptions[0].optionId === correctOptId) {
+              isCorrect = true;
+            }
           }
         }
       } else if (q.type === QuestionType.TRUE_FALSE) {
-        if (q.options.length !== 2) {
-          throw new AuthError(
-            `Configuración inválida en la pregunta TRUE_FALSE '${q.statement}': debe tener exactamente 2 opciones`,
-            400,
-            'QUESTION_INVALID_CONFIGURATION'
-          );
-        }
         const correctOptions = q.options.filter((o) => o.isCorrect);
-        if (correctOptions.length !== 1) {
-          throw new AuthError(
-            `Configuración inválida en la pregunta TRUE_FALSE '${q.statement}': debe tener exactamente una opción correcta`,
-            400,
-            'QUESTION_INVALID_CONFIGURATION'
-          );
-        }
-        const correctOptId = correctOptions[0].id;
-        if (existingAns && existingAns.answerOptions && existingAns.answerOptions.length === 1) {
-          if (existingAns.answerOptions[0].optionId === correctOptId) {
-            isCorrect = true;
+        if (q.options.length === 2 && correctOptions.length === 1) {
+          const correctOptId = correctOptions[0].id;
+          if (existingAns && existingAns.answerOptions && existingAns.answerOptions.length === 1) {
+            if (existingAns.answerOptions[0].optionId === correctOptId) {
+              isCorrect = true;
+            }
           }
         }
       } else if (q.type === QuestionType.MULTIPLE_SELECT) {
         const correctOptions = q.options.filter((o) => o.isCorrect);
-        if (correctOptions.length === 0) {
-          throw new AuthError(
-            `Configuración inválida en la pregunta MULTIPLE_SELECT '${q.statement}': debe tener al menos una opción correcta`,
-            400,
-            'QUESTION_INVALID_CONFIGURATION'
-          );
-        }
-        const correctSet = new Set(correctOptions.map((o) => o.id));
-        const studentSet = new Set(existingAns ? existingAns.answerOptions.map((ao) => ao.optionId) : []);
+        if (correctOptions.length > 0) {
+          const correctSet = new Set(correctOptions.map((o) => o.id));
+          const studentSet = new Set(existingAns ? existingAns.answerOptions.map((ao) => ao.optionId) : []);
 
-        if (correctSet.size === studentSet.size && [...correctSet].every((id) => studentSet.has(id))) {
-          isCorrect = true;
+          if (correctSet.size === studentSet.size && [...correctSet].every((id) => studentSet.has(id))) {
+            isCorrect = true;
+          }
         }
       } else if (q.type === QuestionType.NUMERIC) {
-        if (q.correctNumericValue === null || q.correctNumericValue === undefined) {
-          throw new AuthError(
-            `Configuración inválida en la pregunta NUMERIC '${q.statement}': carece de valor numérico correcto`,
-            400,
-            'QUESTION_INVALID_CONFIGURATION'
-          );
+        if (q.correctNumericValue !== null && q.correctNumericValue !== undefined) {
+          if (existingAns && existingAns.numericValue !== null && existingAns.numericValue !== undefined) {
+            const studentVal = new Prisma.Decimal(existingAns.numericValue);
+            const targetVal = new Prisma.Decimal(q.correctNumericValue);
+            const tolVal = new Prisma.Decimal(q.numericTolerance ?? 0.0001);
+
+            const diff = studentVal.sub(targetVal).abs();
+            if (diff.lte(tolVal)) {
+              isCorrect = true;
+            }
+          }
         }
+      } else if (q.type === QuestionType.CROSSWORD_CLUE) {
+        const correctOptions = q.options.filter((o) => o.isCorrect);
+        const correctOption = correctOptions.length > 0 ? correctOptions[0] : (q.options[0] || null);
 
-        if (existingAns && existingAns.numericValue !== null && existingAns.numericValue !== undefined) {
-          const studentVal = new Prisma.Decimal(existingAns.numericValue);
-          const targetVal = new Prisma.Decimal(q.correctNumericValue);
-          const tolVal = new Prisma.Decimal(q.numericTolerance ?? 0.0001);
-
-          const diff = studentVal.sub(targetVal).abs();
-          if (diff.lte(tolVal)) {
-            isCorrect = true;
+        if (correctOption && correctOption.text) {
+          const targetNormalized = normalizeCrosswordAnswer(correctOption.text);
+          if (existingAns && existingAns.textValue) {
+            const studentNormalized = normalizeCrosswordAnswer(existingAns.textValue);
+            if (studentNormalized.length === targetNormalized.length && studentNormalized === targetNormalized) {
+              isCorrect = true;
+            }
           }
         }
       }
@@ -961,6 +1254,38 @@ export class AttemptService {
         },
       },
     });
+
+    if (finalStatus === AttemptStatus.GRADED) {
+      try {
+        await NotificationService.createNotification({
+          userId: attempt.studentId,
+          type: 'GRADE_PUBLISHED',
+          title: 'Calificación publicada',
+          message: `Tu resultado ya está disponible en ${assessment.title}.`,
+          link: `/app/attempts/${attempt.id}/result`,
+        });
+      } catch (err) {
+        console.error('[NOTIFICATION ERROR] Failed to dispatch GRADE_PUBLISHED:', err);
+      }
+    } else if (finalStatus === AttemptStatus.SUBMITTED) {
+      try {
+        const teachers = await tx.courseTeacher.findMany({
+          where: { courseId: assessment.courseId },
+          select: { teacherId: true },
+        });
+        for (const ct of teachers) {
+          await NotificationService.createNotification({
+            userId: ct.teacherId,
+            type: 'GRADING_PENDING',
+            title: 'Evaluación pendiente de calificar',
+            message: `Hay respuestas pendientes de revisión en ${assessment.title}.`,
+            link: `/app/courses/${assessment.courseId}/assessments/${assessment.id}/grading`,
+          });
+        }
+      } catch (err) {
+        console.error('[NOTIFICATION ERROR] Failed to dispatch GRADING_PENDING:', err);
+      }
+    }
 
     return this.mapToDTO(updatedAttempt);
   }
@@ -1254,6 +1579,7 @@ export class AttemptService {
       totalOpenTextCount,
       pendingOpenTextCount,
       answers: answersMapped,
+      assessment: AssessmentService.mapToStudentDTO(attempt.assessment) as any,
     };
   }
 
@@ -1446,6 +1772,20 @@ export class AttemptService {
             updatedAt: now,
           },
         });
+
+        if (finalStatus === AttemptStatus.GRADED) {
+          try {
+            await NotificationService.createNotification({
+              userId: attempt.studentId,
+              type: 'GRADE_PUBLISHED',
+              title: 'Calificación publicada',
+              message: `Tu resultado ya está disponible en ${attempt.assessment.title}.`,
+              link: `/app/attempts/${attempt.id}/result`,
+            });
+          } catch (err) {
+            console.error('[NOTIFICATION ERROR] Failed to dispatch GRADE_PUBLISHED from gradeAnswer:', err);
+          }
+        }
 
         if (attempt.assessment.course.status === CourseStatus.FINISHED) {
           await GradebookService.recalculateAndPersistCourseFinalGrades(attempt.assessment.courseId, tx);

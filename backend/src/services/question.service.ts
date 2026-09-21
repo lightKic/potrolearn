@@ -44,6 +44,16 @@ export class QuestionService {
           throw new AuthError('TRUE_FALSE debe tener exactamente 1 opción correcta', 400, 'INVALID_QUESTION_CONFIGURATION');
         }
       }
+    } else if (type === QuestionType.CROSSWORD_CLUE) {
+      if (options.length > 0) {
+        if (options.length !== 1) {
+          throw new AuthError('CROSSWORD_CLUE debe tener exactamente 1 opción (la respuesta correcta)', 400, 'INVALID_QUESTION_CONFIGURATION');
+        }
+        const correctCount = options.filter((o) => o.isCorrect).length;
+        if (correctCount !== 1) {
+          throw new AuthError('CROSSWORD_CLUE debe tener su opción configurada como correcta (isCorrect=true)', 400, 'INVALID_QUESTION_CONFIGURATION');
+        }
+      }
     } else if (type === QuestionType.NUMERIC) {
       if (correctNumericValue === undefined || correctNumericValue === null) {
         throw new AuthError('NUMERIC requiere definir correctNumericValue', 400, 'INVALID_QUESTION_CONFIGURATION');
@@ -96,6 +106,34 @@ export class QuestionService {
   }
 
   /**
+   * Helper: Verify if a TEACHER user has academic authorization over a specific Question.
+   */
+  public static async isTeacherAuthorizedForQuestion(userId: string, questionId: string): Promise<boolean> {
+    const teacherCourses = await prisma.courseTeacher.findMany({
+      where: { teacherId: userId },
+      select: { courseId: true, course: { select: { subjectId: true } } },
+    });
+
+    if (teacherCourses.length === 0) return false;
+
+    const teacherSubjectIds = teacherCourses.map((ct) => ct.course.subjectId).filter((id): id is string => Boolean(id));
+    const teacherCourseIds = teacherCourses.map((ct) => ct.courseId);
+
+    const match = await prisma.question.findFirst({
+      where: {
+        id: questionId,
+        OR: [
+          { subjectId: { in: teacherSubjectIds } },
+          { assessmentQuestions: { some: { assessment: { courseId: { in: teacherCourseIds } } } } },
+        ],
+      },
+      select: { id: true },
+    });
+
+    return Boolean(match);
+  }
+
+  /**
    * Create a new Question with optional options.
    */
   public static async createQuestion(
@@ -105,6 +143,22 @@ export class QuestionService {
   ): Promise<QuestionDTO> {
     if (role === Role.STUDENT) {
       throw new AuthError('Acceso denegado: rol insuficiente', 403, 'FORBIDDEN');
+    }
+
+    if (role === Role.TEACHER) {
+      const teacherCourses = await prisma.courseTeacher.findMany({
+        where: { teacherId: userId },
+        select: { course: { select: { subjectId: true } } },
+      });
+      if (teacherCourses.length === 0) {
+        throw new AuthError('Acceso denegado: no estás asignado a ningún curso', 403, 'FORBIDDEN');
+      }
+      if (input.subjectId) {
+        const teacherSubjectIds = teacherCourses.map((ct) => ct.course.subjectId).filter(Boolean);
+        if (!teacherSubjectIds.includes(input.subjectId)) {
+          throw new AuthError('Acceso denegado: no tienes permiso sobre esta materia', 403, 'FORBIDDEN');
+        }
+      }
     }
 
     const statement = input.statement?.trim();
@@ -205,6 +259,24 @@ export class QuestionService {
       where.subjectId = subjectId;
     }
 
+    if (role === Role.TEACHER) {
+      const teacherCourses = await prisma.courseTeacher.findMany({
+        where: { teacherId: userId },
+        select: { courseId: true, course: { select: { subjectId: true } } },
+      });
+      const teacherSubjectIds = teacherCourses.map((ct) => ct.course.subjectId).filter((id): id is string => Boolean(id));
+      const teacherCourseIds = teacherCourses.map((ct) => ct.courseId);
+
+      if (subjectId && !teacherSubjectIds.includes(subjectId)) {
+        throw new AuthError('Acceso denegado: no tienes permiso sobre esta materia', 403, 'FORBIDDEN');
+      }
+
+      where.OR = [
+        { subjectId: { in: teacherSubjectIds } },
+        { assessmentQuestions: { some: { assessment: { courseId: { in: teacherCourseIds } } } } },
+      ];
+    }
+
     const questions = await prisma.question.findMany({
       where,
       include: {
@@ -243,6 +315,13 @@ export class QuestionService {
       throw new AuthError('Pregunta no encontrada', 404, 'QUESTION_NOT_FOUND');
     }
 
+    if (role === Role.TEACHER) {
+      const isAuthorized = await this.isTeacherAuthorizedForQuestion(userId, questionId);
+      if (!isAuthorized) {
+        throw new AuthError('Acceso denegado: no tienes permisos sobre esta pregunta', 403, 'FORBIDDEN');
+      }
+    }
+
     return this.mapToDTO(question);
   }
 
@@ -267,16 +346,49 @@ export class QuestionService {
       throw new AuthError('Pregunta no encontrada', 404, 'QUESTION_NOT_FOUND');
     }
 
+    if (role === Role.TEACHER) {
+      const isAuthorized = await this.isTeacherAuthorizedForQuestion(userId, questionId);
+      if (!isAuthorized) {
+        throw new AuthError('Acceso denegado: no tienes permisos sobre esta pregunta', 403, 'FORBIDDEN');
+      }
+      if (input.subjectId) {
+        const teacherCourses = await prisma.courseTeacher.findMany({
+          where: { teacherId: userId },
+          select: { course: { select: { subjectId: true } } },
+        });
+        const teacherSubjectIds = teacherCourses.map((ct) => ct.course.subjectId).filter(Boolean);
+        if (!teacherSubjectIds.includes(input.subjectId)) {
+          throw new AuthError('Acceso denegado: no tienes permiso sobre la materia especificada', 403, 'FORBIDDEN');
+        }
+      }
+    }
+
     const hasAttempts = await this.hasSubmittedAttempts(questionId);
 
-    // If structural fields are changing, check historical integrity
+    // If structural fields or options are changing, check historical integrity
     if (hasAttempts) {
-      if (
-        (input.statement !== undefined && input.statement.trim() !== existing.statement) ||
-        (input.type !== undefined && input.type !== existing.type) ||
-        (input.correctNumericValue !== undefined && input.correctNumericValue !== (existing.correctNumericValue ? existing.correctNumericValue.toNumber() : null)) ||
-        (input.numericTolerance !== undefined && input.numericTolerance !== existing.numericTolerance.toNumber())
-      ) {
+      const isStatementChanged = input.statement !== undefined && input.statement.trim() !== existing.statement;
+      const isTypeChanged = input.type !== undefined && input.type !== existing.type;
+      const isNumValChanged = input.correctNumericValue !== undefined && input.correctNumericValue !== (existing.correctNumericValue ? existing.correctNumericValue.toNumber() : null);
+      const isNumTolChanged = input.numericTolerance !== undefined && input.numericTolerance !== existing.numericTolerance.toNumber();
+      
+      let isOptionsChanged = false;
+      if (input.options && input.options.length > 0) {
+        if (existing.options.length !== input.options.length) {
+          isOptionsChanged = true;
+        } else {
+          for (let i = 0; i < input.options.length; i++) {
+            const inputOpt = input.options[i];
+            const existOpt = existing.options[i];
+            if (!existOpt || inputOpt.text?.trim() !== existOpt.text || Boolean(inputOpt.isCorrect) !== existOpt.isCorrect) {
+              isOptionsChanged = true;
+              break;
+            }
+          }
+        }
+      }
+
+      if (isStatementChanged || isTypeChanged || isNumValChanged || isNumTolChanged || isOptionsChanged) {
         throw new AuthError('No se pueden realizar modificaciones destructivas en una pregunta con historial de intentos', 409, 'QUESTION_HAS_ATTEMPTS');
       }
     }
@@ -296,7 +408,8 @@ export class QuestionService {
     const targetTol = input.numericTolerance !== undefined ? input.numericTolerance : existing.numericTolerance;
 
     // Validate type rules with new configuration
-    this.validateQuestionRules(newType, existing.options, targetVal, targetTol);
+    const optionsToValidate = input.options && input.options.length > 0 ? input.options.map(o => ({ isCorrect: Boolean(o.isCorrect), text: o.text })) : existing.options;
+    this.validateQuestionRules(newType, optionsToValidate, targetVal, targetTol);
 
     const numericVal =
       newType === QuestionType.NUMERIC && targetVal !== undefined && targetVal !== null
@@ -308,22 +421,86 @@ export class QuestionService {
         ? new Prisma.Decimal(targetTol)
         : new Prisma.Decimal(0.0001);
 
-    const updated = await prisma.question.update({
-      where: { id: questionId },
-      data: {
-        statement: newStatement,
-        type: newType,
-        defaultPoints: new Prisma.Decimal(newDefaultPoints),
-        explanation: input.explanation !== undefined ? (input.explanation?.trim() || null) : existing.explanation,
-        subjectId: input.subjectId !== undefined ? input.subjectId : existing.subjectId,
-        correctNumericValue: numericVal,
-        numericTolerance: numericTol,
-      },
-      include: {
-        options: {
-          orderBy: { order: 'asc' },
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.question.update({
+        where: { id: questionId },
+        data: {
+          statement: newStatement,
+          type: newType,
+          defaultPoints: new Prisma.Decimal(newDefaultPoints),
+          explanation: input.explanation !== undefined ? (input.explanation?.trim() || null) : existing.explanation,
+          subjectId: input.subjectId !== undefined ? input.subjectId : existing.subjectId,
+          correctNumericValue: numericVal,
+          numericTolerance: numericTol,
         },
-      },
+      });
+
+      if (input.options && input.options.length > 0) {
+        if (newType === QuestionType.CROSSWORD_CLUE) {
+          const optInput = input.options[0];
+          const text = optInput.text?.trim();
+          if (!text) {
+            throw new AuthError('El texto de la respuesta no puede estar vacío', 400, 'BAD_REQUEST');
+          }
+          if (existing.options.length > 0) {
+            await tx.questionOption.update({
+              where: { id: existing.options[0].id },
+              data: {
+                text,
+                isCorrect: true,
+                order: 1,
+                explanation: optInput.explanation?.trim() || null,
+              },
+            });
+            if (existing.options.length > 1) {
+              await tx.questionOption.deleteMany({
+                where: {
+                  questionId,
+                  id: { not: existing.options[0].id },
+                },
+              });
+            }
+          } else {
+            await tx.questionOption.create({
+              data: {
+                questionId,
+                text,
+                isCorrect: true,
+                order: 1,
+                explanation: optInput.explanation?.trim() || null,
+              },
+            });
+          }
+        } else {
+          await tx.questionOption.deleteMany({ where: { questionId } });
+          let orderIdx = 1;
+          for (const opt of input.options) {
+            const text = opt.text?.trim();
+            if (!text) {
+              throw new AuthError('El texto de la opción no puede estar vacío', 400, 'BAD_REQUEST');
+            }
+            await tx.questionOption.create({
+              data: {
+                questionId,
+                text,
+                isCorrect: Boolean(opt.isCorrect),
+                explanation: opt.explanation?.trim() || null,
+                order: opt.order ?? orderIdx++,
+              },
+            });
+          }
+        }
+      }
+
+      const reloaded = await tx.question.findUnique({
+        where: { id: questionId },
+        include: {
+          options: {
+            orderBy: { order: 'asc' },
+          },
+        },
+      });
+      return reloaded!;
     });
 
     return this.mapToDTO(updated);
@@ -350,6 +527,13 @@ export class QuestionService {
     });
     if (!question) {
       throw new AuthError('Pregunta no encontrada', 404, 'QUESTION_NOT_FOUND');
+    }
+
+    if (role === Role.TEACHER) {
+      const isAuthorized = await this.isTeacherAuthorizedForQuestion(userId, questionId);
+      if (!isAuthorized) {
+        throw new AuthError('Acceso denegado: no tienes permisos sobre esta pregunta', 403, 'FORBIDDEN');
+      }
     }
 
     if (question.answers.length > 0 || question.assessmentQuestions.length > 0) {
@@ -380,6 +564,13 @@ export class QuestionService {
     });
     if (!question) {
       throw new AuthError('Pregunta no encontrada', 404, 'QUESTION_NOT_FOUND');
+    }
+
+    if (role === Role.TEACHER) {
+      const isAuthorized = await this.isTeacherAuthorizedForQuestion(userId, questionId);
+      if (!isAuthorized) {
+        throw new AuthError('Acceso denegado: no tienes permisos sobre esta pregunta', 403, 'FORBIDDEN');
+      }
     }
 
     if (question.type === QuestionType.NUMERIC || question.type === QuestionType.OPEN_TEXT) {
@@ -446,6 +637,13 @@ export class QuestionService {
     });
     if (!option || option.questionId !== questionId) {
       throw new AuthError('Opción de pregunta no encontrada', 404, 'QUESTION_OPTION_NOT_FOUND');
+    }
+
+    if (role === Role.TEACHER) {
+      const isAuthorized = await this.isTeacherAuthorizedForQuestion(userId, questionId);
+      if (!isAuthorized) {
+        throw new AuthError('Acceso denegado: no tienes permisos sobre esta pregunta', 403, 'FORBIDDEN');
+      }
     }
 
     const hasAttempts = await this.hasSubmittedAttempts(questionId);
@@ -519,6 +717,13 @@ export class QuestionService {
     });
     if (!option || option.questionId !== questionId) {
       throw new AuthError('Opción de pregunta no encontrada', 404, 'QUESTION_OPTION_NOT_FOUND');
+    }
+
+    if (role === Role.TEACHER) {
+      const isAuthorized = await this.isTeacherAuthorizedForQuestion(userId, questionId);
+      if (!isAuthorized) {
+        throw new AuthError('Acceso denegado: no tienes permisos sobre esta pregunta', 403, 'FORBIDDEN');
+      }
     }
 
     if (option.answerOptions.length > 0) {

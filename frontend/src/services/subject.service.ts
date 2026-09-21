@@ -23,4 +23,27 @@ export const SubjectServiceAPI = {
       body: JSON.stringify(input),
     });
   },
+
+  getSubjectTeachers: async (subjectId: string) => {
+    return apiFetch<{ id: string; subjectId: string; teacherId: string; teacher: { id: string; name: string; email: string } }[]>(
+      `/subjects/${subjectId}/teachers`,
+      { method: 'GET' }
+    );
+  },
+
+  assignTeacherToSubject: async (subjectId: string, teacherId: string) => {
+    return apiFetch<{ id: string; subjectId: string; teacherId: string; teacher: { id: string; name: string; email: string } }>(
+      `/subjects/${subjectId}/teachers`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ teacherId }),
+      }
+    );
+  },
+
+  removeTeacherFromSubject: async (subjectId: string, teacherId: string) => {
+    return apiFetch<{ message: string }>(`/subjects/${subjectId}/teachers/${teacherId}`, {
+      method: 'DELETE',
+    });
+  },
 };

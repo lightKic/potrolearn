@@ -43,11 +43,14 @@ export const ExamTimer: React.FC<ExamTimerProps> = ({ startedAt, timeLimitMinute
   if (!timeLimitMinutes || timeLimitMinutes <= 0) {
     return (
       <div className="exam-timer-badge no-limit" aria-label="Sin límite de tiempo">
-        ⏱️ Sin límite de tiempo
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <polyline points="12 6 12 12 16 14"></polyline>
+        </svg>
+        <span>Sin límite de tiempo</span>
       </div>
     );
   }
-
 
   const minutes = Math.floor(remainingSeconds / 60);
   const seconds = remainingSeconds % 60;
@@ -61,8 +64,12 @@ export const ExamTimer: React.FC<ExamTimerProps> = ({ startedAt, timeLimitMinute
       aria-live="polite"
       aria-label={`Tiempo restante: ${minutes} minutos y ${seconds} segundos`}
     >
-      <span className="timer-icon">⏱️</span>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="10"></circle>
+        <polyline points="12 6 12 12 16 14"></polyline>
+      </svg>
       <span className="timer-text">{formattedTime}</span>
     </div>
   );
 };
+

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { AdminService } from '../services/admin.service.js';
 import { AdminUserListItem, AdminUserDetail, UserRole } from '../types/auth.js';
 import { ApiError } from '../services/api.js';
+import { TableSkeleton, ButtonSpinner } from '../components/common/loading/index.js';
 
 export const AdminUsersPage: React.FC = () => {
   const [users, setUsers] = useState<AdminUserListItem[]>([]);
@@ -316,9 +317,8 @@ export const AdminUsersPage: React.FC = () => {
 
       {/* Tabla de Usuarios */}
       {loading ? (
-        <div className="loading-content" style={{ padding: '40px' }}>
-          <div className="loading-spinner" />
-          <p className="loading-text">Cargando usuarios...</p>
+        <div className="dashboard-card" style={{ padding: '24px' }}>
+          <TableSkeleton columns={7} rows={6} />
         </div>
       ) : (
         <div className="dashboard-card" style={{ overflowX: 'auto' }} id="admin-users-table-card">
@@ -534,7 +534,7 @@ export const AdminUsersPage: React.FC = () => {
                   disabled={createLoading}
                   id="create-modal-submit-btn"
                 >
-                  {createLoading ? 'Creando...' : 'Crear Usuario'}
+                  {createLoading ? <><ButtonSpinner /> Creando...</> : 'Crear Usuario'}
                 </button>
               </div>
             </form>
@@ -695,7 +695,7 @@ export const AdminUsersPage: React.FC = () => {
                     id="btn-reset-user-access"
                     style={{ fontSize: '0.85rem', borderColor: '#fca5a5', color: '#b91c1c' }}
                   >
-                    {resetLoading ? 'Restableciendo...' : 'Restablecer Acceso'}
+                    {resetLoading ? <><ButtonSpinner /> Restableciendo...</> : 'Restablecer Acceso'}
                   </button>
                 </div>
               </div>
@@ -716,7 +716,7 @@ export const AdminUsersPage: React.FC = () => {
                   disabled={modalLoading}
                   id="modal-save-btn"
                 >
-                  {modalLoading ? 'Guardando...' : 'Guardar Cambios'}
+                  {modalLoading ? <><ButtonSpinner /> Guardando...</> : 'Guardar Cambios'}
                 </button>
               </div>
             </form>

@@ -1,7 +1,8 @@
-import { CourseStatus, Role, AttemptStatus, QuestionType } from '@prisma/client';
+import { CourseStatus, Role, EnrollmentStatus, AttemptStatus, QuestionType } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { AuthError } from '../types/auth.types';
 import { GradebookService } from './gradebook.service';
+import { NotificationService } from './notification.service';
 
 
 export interface CreateCourseInput {
@@ -18,6 +19,7 @@ export interface UpdateCourseInput {
   description?: string;
   startDate?: string | Date;
   endDate?: string | Date;
+  status?: CourseStatus;
 }
 
 export class CourseService {
@@ -79,6 +81,7 @@ export class CourseService {
           enrollments: {
             some: {
               studentId: user.id,
+              status: EnrollmentStatus.ACTIVE,
             },
           },
         },
@@ -154,8 +157,8 @@ export class CourseService {
           },
         },
       });
-      if (!enrollment) {
-        throw new AuthError('Acceso denegado: no estás inscrito en este curso', 403, 'FORBIDDEN');
+      if (!enrollment || enrollment.status !== EnrollmentStatus.ACTIVE) {
+        throw new AuthError('Acceso denegado: no estás inscrito activamente en este curso', 403, 'FORBIDDEN');
       }
       return course;
     }
@@ -199,6 +202,19 @@ export class CourseService {
 
     // Transacción si es TEACHER para crear Course + CourseTeacher atómicamente
     if (user.role === Role.TEACHER) {
+      const isAuthorized = await prisma.subjectTeacher.findUnique({
+        where: {
+          subjectId_teacherId: {
+            subjectId,
+            teacherId: user.id,
+          },
+        },
+      });
+
+      if (!isAuthorized) {
+        throw new AuthError('Acceso denegado: no estás asignado a esta materia para crear cursos', 403, 'FORBIDDEN');
+      }
+
       const createdCourseId = await prisma.$transaction(async (tx) => {
         const newCourse = await tx.course.create({
           data: {
@@ -260,6 +276,22 @@ export class CourseService {
       if (!subject) {
         throw new AuthError('La materia seleccionada no existe', 404, 'SUBJECT_NOT_FOUND');
       }
+
+      if (user.role === Role.TEACHER) {
+        const isAuthorized = await prisma.subjectTeacher.findUnique({
+          where: {
+            subjectId_teacherId: {
+              subjectId: input.subjectId,
+              teacherId: user.id,
+            },
+          },
+        });
+
+        if (!isAuthorized) {
+          throw new AuthError('Acceso denegado: no estás asignado a la materia especificada', 403, 'FORBIDDEN');
+        }
+      }
+
       updateData.subjectId = input.subjectId;
     }
 
@@ -377,6 +409,35 @@ export class CourseService {
 
         await GradebookService.recalculateAndPersistCourseFinalGrades(courseId, tx);
       });
+
+      try {
+        const enrollments = await prisma.enrollment.findMany({
+          where: { courseId, status: EnrollmentStatus.ACTIVE },
+          select: { studentId: true },
+        });
+        for (const env of enrollments) {
+          await NotificationService.createNotification({
+            userId: env.studentId,
+            type: 'COURSE_FINISHED',
+            title: 'Curso finalizado',
+            message: `El curso "${course.name}" ha finalizado.`,
+            link: `/app/courses/${courseId}`,
+          });
+        }
+        if (course.courseTeachers) {
+          for (const ct of course.courseTeachers) {
+            await NotificationService.createNotification({
+              userId: ct.teacherId,
+              type: 'COURSE_FINISHED',
+              title: 'Curso finalizado',
+              message: `Tu curso "${course.name}" ha finalizado.`,
+              link: `/app/courses/${courseId}`,
+            });
+          }
+        }
+      } catch (err) {
+        console.error('[NOTIFICATION ERROR] Failed to dispatch COURSE_FINISHED:', err);
+      }
     } else {
       await prisma.course.update({
         where: { id: courseId },
@@ -424,7 +485,12 @@ export class CourseService {
       throw new AuthError('El maestro ya se encuentra asignado a este curso', 409, 'TEACHER_ALREADY_ASSIGNED');
     }
 
-    return prisma.courseTeacher.create({
+    const course = await prisma.course.findUnique({
+      where: { id: courseId },
+      select: { name: true },
+    });
+
+    const assignment = await prisma.courseTeacher.create({
       data: {
         courseId,
         teacherId,
@@ -435,6 +501,20 @@ export class CourseService {
         },
       },
     });
+
+    try {
+      await NotificationService.createNotification({
+        userId: teacherId,
+        type: 'COURSE_ASSIGNED',
+        title: 'Nuevo curso asignado',
+        message: `Has sido asignado como maestro de ${course?.name || 'un nuevo curso'}.`,
+        link: `/app/courses/${courseId}`,
+      });
+    } catch (err) {
+      console.error('[NOTIFICATION ERROR] Failed to dispatch COURSE_ASSIGNED:', err);
+    }
+
+    return assignment;
   }
 
   /**

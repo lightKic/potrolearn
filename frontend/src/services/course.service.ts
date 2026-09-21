@@ -17,6 +17,10 @@ import {
   UpdateModuleInput,
   CreateLessonInput,
   UpdateLessonInput,
+  ScheduleModuleBatchInput,
+  ScheduleModuleBatchResult,
+  PublishModuleNowInput,
+  PublishModuleNowResult,
 } from '../types/academic.js';
 
 export interface AdminTeacher {
@@ -127,6 +131,12 @@ export const CourseServiceAPI = {
     });
   },
 
+  dropStudent: async (courseId: string, studentId: string): Promise<{ message: string; enrollment: { id: string; courseId: string; studentId: string; status: string } }> => {
+    return apiFetch<{ message: string; enrollment: { id: string; courseId: string; studentId: string; status: string } }>(`/courses/${courseId}/students/${studentId}/drop`, {
+      method: 'PATCH',
+    });
+  },
+
   getCourseContent: async (courseId: string): Promise<CourseContent> => {
     return apiFetch<CourseContent>(`/courses/${courseId}/content`, { method: 'GET' });
   },
@@ -183,6 +193,28 @@ export const CourseServiceAPI = {
     return apiFetch<{ completed: boolean }>(`/courses/${courseId}/modules/${moduleId}/lessons/${lessonId}/progress`, {
       method: 'PUT',
       body: JSON.stringify({ completed }),
+    });
+  },
+
+  scheduleModuleBatch: async (
+    courseId: string,
+    moduleId: string,
+    input: ScheduleModuleBatchInput
+  ): Promise<ScheduleModuleBatchResult> => {
+    return apiFetch<ScheduleModuleBatchResult>(`/courses/${courseId}/modules/${moduleId}/schedule`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+
+  publishModuleNow: async (
+    courseId: string,
+    moduleId: string,
+    input: PublishModuleNowInput
+  ): Promise<PublishModuleNowResult> => {
+    return apiFetch<PublishModuleNowResult>(`/courses/${courseId}/modules/${moduleId}/publish-now`, {
+      method: 'POST',
+      body: JSON.stringify(input),
     });
   },
 };

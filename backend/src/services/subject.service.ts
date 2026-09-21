@@ -1,4 +1,6 @@
+import { Role } from '@prisma/client';
 import { prisma } from '../lib/prisma';
+import { NotificationService } from './notification.service';
 import { AuthError } from '../types/auth.types';
 
 export interface CreateSubjectInput {
@@ -16,10 +18,44 @@ export interface UpdateSubjectInput {
 
 export class SubjectService {
   /**
-   * Consulta todas las materias disponibles.
+   * Consulta las materias disponibles según el rol del usuario.
    */
-  public static async getAllSubjects() {
+  public static async getAllSubjects(user?: { id: string; role: Role }) {
+    const includeTeachers = {
+      subjectTeachers: {
+        include: {
+          teacher: {
+            select: { id: true, name: true, email: true },
+          },
+        },
+      },
+    };
+
+    if (!user || user.role === Role.ADMIN) {
+      return prisma.subject.findMany({
+        include: includeTeachers,
+        orderBy: { code: 'asc' },
+      });
+    }
+
+    if (user.role === Role.TEACHER) {
+      return prisma.subject.findMany({
+        where: {
+          isActive: true,
+          subjectTeachers: {
+            some: {
+              teacherId: user.id,
+            },
+          },
+        },
+        include: includeTeachers,
+        orderBy: { code: 'asc' },
+      });
+    }
+
+    // STUDENT
     return prisma.subject.findMany({
+      where: { isActive: true },
       orderBy: { code: 'asc' },
     });
   }
@@ -34,6 +70,15 @@ export class SubjectService {
 
     const subject = await prisma.subject.findUnique({
       where: { id },
+      include: {
+        subjectTeachers: {
+          include: {
+            teacher: {
+              select: { id: true, name: true, email: true },
+            },
+          },
+        },
+      },
     });
 
     if (!subject) {
@@ -131,4 +176,114 @@ export class SubjectService {
       data: updateData,
     });
   }
+
+  /**
+   * Obtiene la lista de docentes asignados a una materia.
+   */
+  public static async getSubjectTeachers(subjectId: string) {
+    await SubjectService.getSubjectById(subjectId);
+
+    return prisma.subjectTeacher.findMany({
+      where: { subjectId },
+      include: {
+        teacher: {
+          select: { id: true, name: true, email: true },
+        },
+      },
+      orderBy: { assignedAt: 'asc' },
+    });
+  }
+
+  /**
+   * Asigna un maestro a una materia (Exclusivo ADMIN).
+   */
+  public static async assignTeacherToSubject(subjectId: string, teacherId: string) {
+    const subject = await SubjectService.getSubjectById(subjectId);
+
+    if (!teacherId || typeof teacherId !== 'string') {
+      throw new AuthError('El maestro a asignar es requerido', 400, 'INVALID_TEACHER_ID');
+    }
+
+    const teacher = await prisma.user.findUnique({
+      where: { id: teacherId },
+    });
+
+    if (!teacher) {
+      throw new AuthError('El usuario seleccionado no existe', 404, 'USER_NOT_FOUND');
+    }
+
+    if (teacher.role !== Role.TEACHER) {
+      throw new AuthError('El usuario asignado debe contar con el rol de Maestro', 400, 'INVALID_TEACHER_ROLE');
+    }
+
+    if (!teacher.isActive) {
+      throw new AuthError('El maestro seleccionado se encuentra inactivo', 400, 'TEACHER_INACTIVE');
+    }
+
+    const existing = await prisma.subjectTeacher.findUnique({
+      where: {
+        subjectId_teacherId: {
+          subjectId,
+          teacherId,
+        },
+      },
+    });
+
+    if (existing) {
+      throw new AuthError('El maestro ya se encuentra asignado a esta materia', 409, 'TEACHER_ALREADY_ASSIGNED_TO_SUBJECT');
+    }
+
+    const assignment = await prisma.subjectTeacher.create({
+      data: {
+        subjectId,
+        teacherId,
+      },
+      include: {
+        teacher: {
+          select: { id: true, name: true, email: true },
+        },
+      },
+    });
+
+    try {
+      await NotificationService.createNotification({
+        userId: teacherId,
+        type: 'SUBJECT_ASSIGNED',
+        title: 'Nueva materia asignada',
+        message: `Has sido autorizado para trabajar con ${subject.name}.`,
+        link: '/app/courses',
+      });
+    } catch (err) {
+      console.error('[NOTIFICATION ERROR] Failed to dispatch SUBJECT_ASSIGNED:', err);
+    }
+
+    return assignment;
+  }
+
+  /**
+   * Quita a un maestro de una materia (Exclusivo ADMIN).
+   */
+  public static async removeTeacherFromSubject(subjectId: string, teacherId: string) {
+    await SubjectService.getSubjectById(subjectId);
+
+    const existing = await prisma.subjectTeacher.findUnique({
+      where: {
+        subjectId_teacherId: {
+          subjectId,
+          teacherId,
+        },
+      },
+    });
+
+    if (!existing) {
+      throw new AuthError('El maestro no está asignado a esta materia', 404, 'TEACHER_NOT_ASSIGNED_TO_SUBJECT');
+    }
+
+    await prisma.subjectTeacher.delete({
+      where: { id: existing.id },
+    });
+
+    return { message: 'Maestro removido de la materia exitosamente' };
+  }
 }
+

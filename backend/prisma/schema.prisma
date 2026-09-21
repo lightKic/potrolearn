@@ -38,6 +38,7 @@ enum AssessmentType {
   QUIZ
   EXAM
   FINAL
+  CROSSWORD
 }
 
 enum QuestionType {
@@ -46,12 +47,14 @@ enum QuestionType {
   TRUE_FALSE
   NUMERIC
   OPEN_TEXT
+  CROSSWORD_CLUE
 }
 
 enum AttemptStatus {
   IN_PROGRESS
   SUBMITTED
   GRADED
+  ABANDONED
 }
 
 enum TokenType {
@@ -77,12 +80,16 @@ model User {
   updatedAt          DateTime  @updatedAt
 
   studentProfile  StudentProfile?
-  createdCourses  Course[]         @relation("CreatedCourses")
+  createdCourses  Course[]                 @relation("CreatedCourses")
   courseTeachers  CourseTeacher[]
   enrollments     Enrollment[]
   attempts        Attempt[]
   authTokens      AuthToken[]
   refreshSessions RefreshSession[]
+  grantedStudentAttempts AssessmentAttemptGrant[] @relation("GrantedStudentAttempts")
+  grantedTeacherAttempts AssessmentAttemptGrant[] @relation("GrantedByTeacherAttempts")
+  subjectTeachers        SubjectTeacher[]         @relation("TeacherSubjects")
+  notifications          Notification[]
 
   @@map("users")
 }
@@ -145,8 +152,9 @@ model Subject {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  courses   Course[]
-  questions Question[]
+  courses         Course[]
+  questions       Question[]
+  subjectTeachers SubjectTeacher[]
 
   @@map("subjects")
 }
@@ -189,6 +197,21 @@ model CourseTeacher {
   @@map("course_teachers")
 }
 
+model SubjectTeacher {
+  id         String   @id @default(uuid())
+  subjectId  String
+  teacherId  String
+  assignedAt DateTime @default(now())
+
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  teacher User    @relation("TeacherSubjects", fields: [teacherId], references: [id], onDelete: Restrict)
+
+  @@unique([subjectId, teacherId])
+  @@index([subjectId])
+  @@index([teacherId])
+  @@map("subject_teachers")
+}
+
 model Enrollment {
   id          String           @id @default(uuid())
   studentId   String
@@ -213,39 +236,45 @@ model Enrollment {
 // ==========================================
 
 model Module {
-  id          String   @id @default(uuid())
-  courseId    String
-  title       String
-  description String?  @db.Text
-  order       Int
-  isPublished Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                 String    @id @default(uuid())
+  courseId           String
+  title              String
+  description        String?   @db.Text
+  order              Int
+  isPublished        Boolean   @default(false)
+  scheduledPublishAt DateTime?
+  publishedAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   course      Course       @relation(fields: [courseId], references: [id], onDelete: Cascade)
   lessons     Lesson[]
   assessments Assessment[]
 
   @@index([courseId])
+  @@index([isPublished, scheduledPublishAt])
   @@map("modules")
 }
 
 model Lesson {
-  id          String   @id @default(uuid())
-  moduleId    String
-  title       String
-  description String?  @db.Text
-  content     String?  @db.Text
-  order       Int
-  isPublished Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                 String    @id @default(uuid())
+  moduleId           String
+  title              String
+  description        String?   @db.Text
+  content            String?   @db.Text
+  order              Int
+  isPublished        Boolean   @default(false)
+  scheduledPublishAt DateTime?
+  publishedAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   module         Module           @relation(fields: [moduleId], references: [id], onDelete: Cascade)
   lessonProgress LessonProgress[]
   assessments    Assessment[]
 
   @@index([moduleId])
+  @@index([isPublished, scheduledPublishAt])
   @@map("lessons")
 }
 
@@ -267,32 +296,37 @@ model LessonProgress {
 // ==========================================
 
 model Assessment {
-  id               String         @id @default(uuid())
-  courseId         String
-  moduleId         String?
-  lessonId         String?
-  title            String
-  description      String?        @db.Text
-  type             AssessmentType
-  weight           Decimal        @default(0.0) @db.Decimal(5, 2)
-  availableFrom    DateTime?
-  availableUntil   DateTime?
-  timeLimitMinutes Int?
-  maxAttempts      Int?
-  passingScore     Decimal?       @db.Decimal(5, 2)
-  isPublished      Boolean        @default(false)
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  id                 String         @id @default(uuid())
+  courseId           String
+  moduleId           String?
+  lessonId           String?
+  title              String
+  description        String?        @db.Text
+  type               AssessmentType
+  weight             Decimal        @default(0.0) @db.Decimal(5, 2)
+  availableFrom      DateTime?
+  availableUntil     DateTime?
+  timeLimitMinutes   Int?
+  maxAttempts        Int?
+  passingScore       Decimal?       @db.Decimal(5, 2)
+  isPublished        Boolean        @default(false)
+  scheduledPublishAt DateTime?
+  publishedAt        DateTime?
+  crosswordLayout    Json?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
 
   course              Course               @relation(fields: [courseId], references: [id], onDelete: Cascade)
   module              Module?              @relation(fields: [moduleId], references: [id], onDelete: SetNull)
   lesson              Lesson?              @relation(fields: [lessonId], references: [id], onDelete: SetNull)
   assessmentQuestions AssessmentQuestion[]
   attempts            Attempt[]
+  attemptGrants       AssessmentAttemptGrant[]
 
   @@index([courseId])
   @@index([moduleId])
   @@index([lessonId])
+  @@index([isPublished, scheduledPublishAt])
   @@map("assessments")
 }
 
@@ -402,3 +436,50 @@ model AnswerOption {
   @@unique([answerId, optionId])
   @@map("answer_options")
 }
+
+// ==========================================
+// 6. INTENTOS ADICIONALES (GRANTS)
+// ==========================================
+
+model AssessmentAttemptGrant {
+  id           String   @id @default(uuid())
+  assessmentId String
+  studentId    String
+  grantedById  String
+  quantity     Int      @default(1)
+  reason       String?  @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  assessment Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  student    User       @relation("GrantedStudentAttempts", fields: [studentId], references: [id], onDelete: Restrict)
+  grantedBy  User       @relation("GrantedByTeacherAttempts", fields: [grantedById], references: [id], onDelete: Restrict)
+
+  @@index([studentId, assessmentId])
+  @@index([assessmentId])
+  @@index([grantedById])
+  @@map("assessment_attempt_grants")
+}
+
+// ==========================================
+// 7. NOTIFICACIONES IN-APP
+// ==========================================
+
+model Notification {
+  id        String    @id @default(uuid())
+  userId    String
+  type      String
+  title     String
+  message   String    @db.Text
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+

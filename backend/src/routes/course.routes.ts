@@ -173,6 +173,17 @@ router.post(
   AuthController.resetAccess
 );
 
+// PATCH /api/courses/:courseId/students/:studentId/drop
+router.patch(
+  '/:courseId/students/:studentId/drop',
+  authenticate,
+  requireActiveUser,
+  requirePasswordChanged,
+  requireRole(Role.ADMIN, Role.TEACHER),
+  requireCourseTeacher,
+  CourseController.dropStudent
+);
+
 // GET /api/courses/:courseId/content (ADMIN, TEACHER, STUDENT)
 router.get(
   '/:courseId/content',
@@ -222,6 +233,28 @@ router.put(
   requireRole(Role.ADMIN, Role.TEACHER),
   requireCourseTeacher,
   ContentController.updateModule
+);
+
+// PUT /api/courses/:courseId/modules/:moduleId/schedule (ADMIN, TEACHER asignado)
+router.put(
+  '/:courseId/modules/:moduleId/schedule',
+  authenticate,
+  requireActiveUser,
+  requirePasswordChanged,
+  requireRole(Role.ADMIN, Role.TEACHER),
+  requireCourseTeacher,
+  ContentController.scheduleModuleBatch
+);
+
+// POST /api/courses/:courseId/modules/:moduleId/publish-now (ADMIN, TEACHER asignado)
+router.post(
+  '/:courseId/modules/:moduleId/publish-now',
+  authenticate,
+  requireActiveUser,
+  requirePasswordChanged,
+  requireRole(Role.ADMIN, Role.TEACHER),
+  requireCourseTeacher,
+  ContentController.publishModuleNow
 );
 
 // GET /api/courses/:courseId/modules/:moduleId/lessons (ADMIN, TEACHER, STUDENT)

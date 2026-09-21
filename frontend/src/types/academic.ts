@@ -1,5 +1,17 @@
 export type CourseStatus = 'DRAFT' | 'ACTIVE' | 'FINISHED' | 'ARCHIVED';
 
+export interface SubjectTeacher {
+  id: string;
+  subjectId: string;
+  teacherId: string;
+  assignedAt: string;
+  teacher?: {
+    id: string;
+    name: string;
+    email: string;
+  };
+}
+
 export interface Subject {
   id: string;
   code: string;
@@ -8,6 +20,7 @@ export interface Subject {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+  subjectTeachers?: SubjectTeacher[];
 }
 
 export interface CreateSubjectInput {
@@ -163,6 +176,8 @@ export interface Lesson {
   content: string | null;
   order: number;
   isPublished: boolean;
+  scheduledPublishAt?: string | null;
+  publishedAt?: string | null;
   completed?: boolean;
   createdAt: string;
   updatedAt: string;
@@ -177,6 +192,8 @@ export interface Module {
   description: string | null;
   order: number;
   isPublished: boolean;
+  scheduledPublishAt?: string | null;
+  publishedAt?: string | null;
   createdAt: string;
   updatedAt: string;
   lessons?: Lesson[];
@@ -198,12 +215,14 @@ export interface CreateModuleInput {
   title: string;
   description?: string;
   isPublished?: boolean;
+  scheduledPublishAt?: string | null;
 }
 
 export interface UpdateModuleInput {
   title?: string;
   description?: string;
   isPublished?: boolean;
+  scheduledPublishAt?: string | null;
 }
 
 export interface CreateLessonInput {
@@ -211,6 +230,7 @@ export interface CreateLessonInput {
   description?: string;
   content?: string;
   isPublished?: boolean;
+  scheduledPublishAt?: string | null;
 }
 
 export interface UpdateLessonInput {
@@ -218,4 +238,47 @@ export interface UpdateLessonInput {
   description?: string;
   content?: string;
   isPublished?: boolean;
+  scheduledPublishAt?: string | null;
 }
+
+export interface ScheduleModuleContentItemInput {
+  type: 'LESSON' | 'ASSESSMENT';
+  id: string;
+  scheduledPublishAt?: string | null;
+  action?: 'SCHEDULE' | 'UNSCHEDULE';
+}
+
+export interface ScheduleModuleBatchInput {
+  moduleScheduledPublishAt?: string | null;
+  contents?: ScheduleModuleContentItemInput[];
+}
+
+export interface ScheduleModuleBatchResultItem {
+  id: string;
+  type: 'LESSON' | 'ASSESSMENT';
+  scheduledPublishAt: string | null;
+  isPublished: boolean;
+}
+
+export interface ScheduleModuleBatchResult {
+  module: Module;
+  contents: ScheduleModuleBatchResultItem[];
+}
+
+export interface PublishModuleNowInput {
+  publishModuleOnly?: boolean;
+  publishContentIds?: string[];
+}
+
+export interface PublishModuleNowResultItem {
+  id: string;
+  type: 'LESSON' | 'ASSESSMENT';
+  isPublished: boolean;
+}
+
+export interface PublishModuleNowResult {
+  module: Module;
+  contents: PublishModuleNowResultItem[];
+  publishedContentCount: number;
+}
+

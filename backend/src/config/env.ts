@@ -33,6 +33,8 @@ const emailFrom = process.env.EMAIL_FROM || 'PotroLearn <noreply@potrolearn.edu.
 const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
 const corsOrigin = process.env.CORS_ORIGIN || frontendUrl;
 
+const enableScheduledPublish = process.env.ENABLE_SCHEDULED_PUBLISH !== 'false';
+
 export const env = {
   databaseUrl,
   jwtSecret,
@@ -45,4 +47,5 @@ export const env = {
   emailFrom,
   frontendUrl,
   corsOrigin,
+  enableScheduledPublish,
 } as const;

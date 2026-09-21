@@ -3,6 +3,7 @@ import { Role, TokenType, CourseStatus, EnrollmentStatus, User, Prisma } from '@
 import { prisma } from '../lib/prisma';
 import { PasswordService } from './password.service';
 import { AuthTokenService } from './auth-token.service';
+import { NotificationService } from './notification.service';
 import { emailService } from './email/email.service';
 import { AuthError, AdminUserListItemDTO, AdminUserDetailDTO } from '../types/auth.types';
 import {
@@ -238,7 +239,51 @@ export class UserProvisioningService {
       });
 
       if (existingEnrollment) {
-        throw new AuthError('El alumno ya se encuentra inscrito en este curso', 409, 'STUDENT_ALREADY_ENROLLED');
+        if (existingEnrollment.status === EnrollmentStatus.ACTIVE) {
+          throw new AuthError('El alumno ya se encuentra inscrito en este curso', 409, 'STUDENT_ALREADY_ENROLLED');
+        }
+        if (existingEnrollment.status === EnrollmentStatus.COMPLETED) {
+          throw new AuthError('El alumno ya ha completado este curso', 409, 'STUDENT_COURSE_COMPLETED');
+        }
+        if (existingEnrollment.status === EnrollmentStatus.DROPPED) {
+          // Reactivar la inscripción existente conservando id e historial
+          const enrollment = await prisma.enrollment.update({
+            where: { id: existingEnrollment.id },
+            data: {
+              status: EnrollmentStatus.ACTIVE,
+              completedAt: null,
+            },
+          });
+
+          let emailSent = false;
+          try {
+            emailSent = await emailService.sendCourseEnrollmentNotification({
+              recipientEmail: studentUser.email,
+              recipientName: studentUser.name,
+              courseName: course.name,
+            });
+          } catch (emailErr) {
+            console.error('[EMAIL ERROR] Falló el envío del correo al estudiante existente:', emailErr);
+            emailSent = false;
+          }
+
+          return {
+            student: {
+              id: studentUser.id,
+              name: studentUser.name,
+              email: studentUser.email,
+              studentNumber: existingProfile.studentNumber,
+              activatedAt: studentUser.activatedAt,
+            },
+            enrollment: {
+              id: enrollment.id,
+              courseId: enrollment.courseId,
+              status: enrollment.status,
+            },
+            isNewStudent: false,
+            emailSent,
+          };
+        }
       }
 
       // Crear únicamente la inscripción (Enrollment)
@@ -262,6 +307,24 @@ export class UserProvisioningService {
         } catch (emailErr) {
           console.error('[EMAIL ERROR] Falló el envío del correo al estudiante existente:', emailErr);
           emailSent = false;
+        }
+
+        try {
+          const courseTeachers = await prisma.courseTeacher.findMany({
+            where: { courseId },
+            select: { teacherId: true },
+          });
+          for (const ct of courseTeachers) {
+            await NotificationService.createNotification({
+              userId: ct.teacherId,
+              type: 'NEW_ENROLLMENT',
+              title: 'Nuevo alumno inscrito',
+              message: `${studentUser.name} fue inscrito en ${course.name}.`,
+              link: `/app/students`,
+            });
+          }
+        } catch (notifErr) {
+          console.error('[NOTIFICATION ERROR] Failed to dispatch NEW_ENROLLMENT:', notifErr);
         }
 
         return {
@@ -378,6 +441,24 @@ export class UserProvisioningService {
       emailSent = false;
     }
 
+    try {
+      const courseTeachers = await prisma.courseTeacher.findMany({
+        where: { courseId },
+        select: { teacherId: true },
+      });
+      for (const ct of courseTeachers) {
+        await NotificationService.createNotification({
+          userId: ct.teacherId,
+          type: 'NEW_ENROLLMENT',
+          title: 'Nuevo alumno inscrito',
+          message: `${createdUser.name} fue inscrito en ${course.name}.`,
+          link: `/app/students`,
+        });
+      }
+    } catch (notifErr) {
+      console.error('[NOTIFICATION ERROR] Failed to dispatch NEW_ENROLLMENT:', notifErr);
+    }
+
     return {
       student: {
         id: createdUser.id,
@@ -409,7 +490,10 @@ export class UserProvisioningService {
     }
 
     const enrollments = await prisma.enrollment.findMany({
-      where: { courseId },
+      where: {
+        courseId,
+        status: EnrollmentStatus.ACTIVE,
+      },
       include: {
         student: {
           include: {
@@ -504,7 +588,7 @@ export class UserProvisioningService {
           },
         },
         enrollments: {
-          where: { courseId },
+          where: { courseId, status: EnrollmentStatus.ACTIVE },
           select: { id: true },
         },
       },
@@ -608,7 +692,7 @@ export class UserProvisioningService {
     const userByEmailMap = new Map(allUsers.map((u) => [u.email.toLowerCase(), u]));
 
     const currentEnrollments = await prisma.enrollment.findMany({
-      where: { courseId },
+      where: { courseId, status: EnrollmentStatus.ACTIVE },
       select: { studentId: true },
     });
     const enrolledStudentIds = new Set(currentEnrollments.map((e) => e.studentId));
@@ -1336,6 +1420,83 @@ export class UserProvisioningService {
         ? 'Contraseña y acceso restablecidos correctamente. Se ha enviado un correo con la nueva contraseña temporal.'
         : 'Restablecimiento de acceso generado exitosamente. El servicio de correo no pudo entregar el mensaje.',
       emailSent,
+    };
+  }
+
+  /**
+   * Retira lógicamente a un alumno de un curso cambiando su estado de Enrollment a DROPPED.
+   * Se preserva el usuario, perfil e historial académico completo (lecciones, intentos, respuestas, notas).
+   */
+  public static async dropStudent(courseId: string, studentId: string) {
+    if (!courseId || typeof courseId !== 'string') {
+      throw new AuthError('Identificador de curso no válido', 400, 'INVALID_COURSE_ID');
+    }
+
+    if (!studentId || typeof studentId !== 'string') {
+      throw new AuthError('Identificador de estudiante no válido', 400, 'INVALID_STUDENT_ID');
+    }
+
+    const course = await prisma.course.findUnique({
+      where: { id: courseId },
+    });
+
+    if (!course) {
+      throw new AuthError('El curso especificado no existe', 404, 'COURSE_NOT_FOUND');
+    }
+
+    const enrollment = await prisma.enrollment.findUnique({
+      where: {
+        courseId_studentId: {
+          courseId,
+          studentId,
+        },
+      },
+      include: {
+        student: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    if (!enrollment) {
+      throw new AuthError('El alumno no se encuentra inscrito en este curso', 404, 'ENROLLMENT_NOT_FOUND');
+    }
+
+    if (enrollment.status === EnrollmentStatus.COMPLETED) {
+      throw new AuthError('No se puede retirar a un alumno de un curso ya completado', 400, 'ENROLLMENT_ALREADY_COMPLETED');
+    }
+
+    if (enrollment.status === EnrollmentStatus.DROPPED) {
+      return {
+        message: 'El alumno ya se encontraba retirado de este curso',
+        enrollment,
+      };
+    }
+
+    const updatedEnrollment = await prisma.enrollment.update({
+      where: { id: enrollment.id },
+      data: {
+        status: EnrollmentStatus.DROPPED,
+        completedAt: null,
+      },
+      include: {
+        student: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    return {
+      message: `Alumno ${enrollment.student.name} retirado del curso exitosamente`,
+      enrollment: updatedEnrollment,
     };
   }
 }

@@ -1,5 +1,6 @@
-import { Role, CourseStatus } from '@prisma/client';
+import { Role, CourseStatus, EnrollmentStatus } from '@prisma/client';
 import { prisma } from '../lib/prisma';
+import { NotificationService } from './notification.service';
 import { AuthError } from '../types/auth.types';
 import {
   CreateModuleInput,
@@ -9,6 +10,11 @@ import {
   ModuleDTO,
   LessonDTO,
   CourseContentDTO,
+  ScheduleModuleBatchInput,
+  ScheduleModuleBatchResultDTO,
+  PublishModuleNowInput,
+  PublishModuleNowResultDTO,
+  ScheduleModuleBatchContentResultDTO,
 } from '../types/content.types';
 
 export class ContentService {
@@ -61,8 +67,8 @@ export class ContentService {
         },
       });
 
-      if (!isEnrolled) {
-        throw new AuthError('Acceso denegado: no estás inscrito en este curso', 403, 'FORBIDDEN');
+      if (!isEnrolled || isEnrolled.status !== EnrollmentStatus.ACTIVE) {
+        throw new AuthError('Acceso denegado: no estás inscrito activamente en este curso', 403, 'FORBIDDEN');
       }
       return course;
     }
@@ -173,6 +179,8 @@ export class ContentService {
         description: m.description,
         order: m.order,
         isPublished: m.isPublished,
+        scheduledPublishAt: m.scheduledPublishAt,
+        publishedAt: m.publishedAt,
         createdAt: m.createdAt,
         updatedAt: m.updatedAt,
         lessons: m.lessons.map((l) => ({
@@ -183,6 +191,8 @@ export class ContentService {
           content: l.content,
           order: l.order,
           isPublished: l.isPublished,
+          scheduledPublishAt: l.scheduledPublishAt,
+          publishedAt: l.publishedAt,
           completed: isStudent ? completedLessonIdsSet.has(l.id) : undefined,
           createdAt: l.createdAt,
           updatedAt: l.updatedAt,
@@ -213,6 +223,8 @@ export class ContentService {
       description: m.description,
       order: m.order,
       isPublished: m.isPublished,
+      scheduledPublishAt: m.scheduledPublishAt,
+      publishedAt: m.publishedAt,
       createdAt: m.createdAt,
       updatedAt: m.updatedAt,
     }));
@@ -234,6 +246,25 @@ export class ContentService {
       throw new AuthError('El título del módulo es requerido', 400, 'BAD_REQUEST');
     }
 
+    let scheduledPublishAt: Date | null = null;
+    let isPublished = input.isPublished ?? true;
+    let publishedAt: Date | null = isPublished ? new Date() : null;
+
+    if (input.scheduledPublishAt) {
+      const parsedDate = new Date(input.scheduledPublishAt);
+      if (isNaN(parsedDate.getTime())) {
+        throw new AuthError('La fecha de publicación programada es inválida', 400, 'BAD_REQUEST');
+      }
+      if (parsedDate.getTime() <= Date.now()) {
+        throw new AuthError('La fecha de publicación programada debe ser en el futuro', 400, 'SCHEDULED_DATE_MUST_BE_FUTURE');
+      }
+      scheduledPublishAt = parsedDate;
+      isPublished = false;
+      publishedAt = null;
+    } else if (input.scheduledPublishAt === null) {
+      scheduledPublishAt = null;
+    }
+
     const maxModule = await prisma.module.findFirst({
       where: { courseId },
       orderBy: { order: 'desc' },
@@ -247,9 +278,21 @@ export class ContentService {
         title,
         description: input.description?.trim() || null,
         order: nextOrder,
-        isPublished: input.isPublished ?? true,
+        isPublished,
+        scheduledPublishAt,
+        publishedAt,
       },
     });
+
+    if (newModule.isPublished) {
+      await ContentService.notifyEnrolledStudents(
+        courseId,
+        'MODULE_PUBLISHED',
+        'Nuevo módulo disponible',
+        `El módulo "${newModule.title}" ya está disponible en ${course.name}.`,
+        `/app/courses/${courseId}`
+      );
+    }
 
     return {
       id: newModule.id,
@@ -258,6 +301,8 @@ export class ContentService {
       description: newModule.description,
       order: newModule.order,
       isPublished: newModule.isPublished,
+      scheduledPublishAt: newModule.scheduledPublishAt,
+      publishedAt: newModule.publishedAt,
       createdAt: newModule.createdAt,
       updatedAt: newModule.updatedAt,
     };
@@ -287,6 +332,8 @@ export class ContentService {
       title?: string;
       description?: string | null;
       isPublished?: boolean;
+      scheduledPublishAt?: Date | null;
+      publishedAt?: Date | null;
     } = {};
 
     if (input.title !== undefined) {
@@ -301,14 +348,51 @@ export class ContentService {
       updateData.description = input.description ? input.description.trim() : null;
     }
 
-    if (input.isPublished !== undefined) {
+    if (input.scheduledPublishAt !== undefined) {
+      if (input.scheduledPublishAt === null) {
+        updateData.scheduledPublishAt = null;
+        if (input.isPublished !== undefined) {
+          updateData.isPublished = input.isPublished;
+          if (input.isPublished && !existingModule.publishedAt) {
+            updateData.publishedAt = new Date();
+          }
+        }
+      } else {
+        const parsedDate = new Date(input.scheduledPublishAt);
+        if (isNaN(parsedDate.getTime())) {
+          throw new AuthError('La fecha de publicación programada es inválida', 400, 'BAD_REQUEST');
+        }
+        if (parsedDate.getTime() <= Date.now()) {
+          throw new AuthError('La fecha de publicación programada debe ser en el futuro', 400, 'SCHEDULED_DATE_MUST_BE_FUTURE');
+        }
+        updateData.scheduledPublishAt = parsedDate;
+        updateData.isPublished = false;
+        updateData.publishedAt = null;
+      }
+    } else if (input.isPublished !== undefined) {
       updateData.isPublished = input.isPublished;
+      if (input.isPublished) {
+        updateData.scheduledPublishAt = null;
+        if (!existingModule.publishedAt) {
+          updateData.publishedAt = new Date();
+        }
+      }
     }
 
     const updatedModule = await prisma.module.update({
       where: { id: moduleId },
       data: updateData,
     });
+
+    if (updatedModule.isPublished && !existingModule.isPublished) {
+      await ContentService.notifyEnrolledStudents(
+        courseId,
+        'MODULE_PUBLISHED',
+        'Nuevo módulo disponible',
+        `El módulo "${updatedModule.title}" ya está disponible en ${course.name}.`,
+        `/app/courses/${courseId}`
+      );
+    }
 
     return {
       id: updatedModule.id,
@@ -317,6 +401,8 @@ export class ContentService {
       description: updatedModule.description,
       order: updatedModule.order,
       isPublished: updatedModule.isPublished,
+      scheduledPublishAt: updatedModule.scheduledPublishAt,
+      publishedAt: updatedModule.publishedAt,
       createdAt: updatedModule.createdAt,
       updatedAt: updatedModule.updatedAt,
     };
@@ -404,9 +490,37 @@ export class ContentService {
       content: l.content,
       order: l.order,
       isPublished: l.isPublished,
+      scheduledPublishAt: l.scheduledPublishAt,
+      publishedAt: l.publishedAt,
       createdAt: l.createdAt,
       updatedAt: l.updatedAt,
     }));
+  }
+
+  private static async notifyEnrolledStudents(
+    courseId: string,
+    type: string,
+    title: string,
+    message: string,
+    link: string
+  ) {
+    try {
+      const enrollments = await prisma.enrollment.findMany({
+        where: { courseId, status: EnrollmentStatus.ACTIVE },
+        select: { studentId: true },
+      });
+      for (const env of enrollments) {
+        await NotificationService.createNotification({
+          userId: env.studentId,
+          type,
+          title,
+          message,
+          link,
+        });
+      }
+    } catch (err) {
+      console.error(`[NOTIFICATION ERROR] Failed to dispatch ${type}:`, err);
+    }
   }
 
   /**
@@ -434,6 +548,25 @@ export class ContentService {
       throw new AuthError('El título de la lección es requerido', 400, 'BAD_REQUEST');
     }
 
+    let scheduledPublishAt: Date | null = null;
+    let isPublished = input.isPublished ?? true;
+    let publishedAt: Date | null = isPublished ? new Date() : null;
+
+    if (input.scheduledPublishAt) {
+      const parsedDate = new Date(input.scheduledPublishAt);
+      if (isNaN(parsedDate.getTime())) {
+        throw new AuthError('La fecha de publicación programada es inválida', 400, 'BAD_REQUEST');
+      }
+      if (parsedDate.getTime() <= Date.now()) {
+        throw new AuthError('La fecha de publicación programada debe ser en el futuro', 400, 'SCHEDULED_DATE_MUST_BE_FUTURE');
+      }
+      scheduledPublishAt = parsedDate;
+      isPublished = false;
+      publishedAt = null;
+    } else if (input.scheduledPublishAt === null) {
+      scheduledPublishAt = null;
+    }
+
     const maxLesson = await prisma.lesson.findFirst({
       where: { moduleId },
       orderBy: { order: 'desc' },
@@ -448,9 +581,21 @@ export class ContentService {
         description: input.description?.trim() || null,
         content: input.content?.trim() || null,
         order: nextOrder,
-        isPublished: input.isPublished ?? true,
+        isPublished,
+        scheduledPublishAt,
+        publishedAt,
       },
     });
+
+    if (newLesson.isPublished) {
+      await ContentService.notifyEnrolledStudents(
+        courseId,
+        'LESSON_PUBLISHED',
+        'Nueva lección disponible',
+        `Se publicó la lección "${newLesson.title}" en ${course.name}.`,
+        `/app/courses/${courseId}/modules/${moduleId}/lessons/${newLesson.id}`
+      );
+    }
 
     return {
       id: newLesson.id,
@@ -460,6 +605,8 @@ export class ContentService {
       content: newLesson.content,
       order: newLesson.order,
       isPublished: newLesson.isPublished,
+      scheduledPublishAt: newLesson.scheduledPublishAt,
+      publishedAt: newLesson.publishedAt,
       createdAt: newLesson.createdAt,
       updatedAt: newLesson.updatedAt,
     };
@@ -499,6 +646,8 @@ export class ContentService {
       description?: string | null;
       content?: string | null;
       isPublished?: boolean;
+      scheduledPublishAt?: Date | null;
+      publishedAt?: Date | null;
     } = {};
 
     if (input.title !== undefined) {
@@ -517,14 +666,51 @@ export class ContentService {
       updateData.content = input.content ? input.content.trim() : null;
     }
 
-    if (input.isPublished !== undefined) {
+    if (input.scheduledPublishAt !== undefined) {
+      if (input.scheduledPublishAt === null) {
+        updateData.scheduledPublishAt = null;
+        if (input.isPublished !== undefined) {
+          updateData.isPublished = input.isPublished;
+          if (input.isPublished && !lessonObj.publishedAt) {
+            updateData.publishedAt = new Date();
+          }
+        }
+      } else {
+        const parsedDate = new Date(input.scheduledPublishAt);
+        if (isNaN(parsedDate.getTime())) {
+          throw new AuthError('La fecha de publicación programada es inválida', 400, 'BAD_REQUEST');
+        }
+        if (parsedDate.getTime() <= Date.now()) {
+          throw new AuthError('La fecha de publicación programada debe ser en el futuro', 400, 'SCHEDULED_DATE_MUST_BE_FUTURE');
+        }
+        updateData.scheduledPublishAt = parsedDate;
+        updateData.isPublished = false;
+        updateData.publishedAt = null;
+      }
+    } else if (input.isPublished !== undefined) {
       updateData.isPublished = input.isPublished;
+      if (input.isPublished) {
+        updateData.scheduledPublishAt = null;
+        if (!lessonObj.publishedAt) {
+          updateData.publishedAt = new Date();
+        }
+      }
     }
 
     const updatedLesson = await prisma.lesson.update({
       where: { id: lessonId },
       data: updateData,
     });
+
+    if (updatedLesson.isPublished && !lessonObj.isPublished) {
+      await ContentService.notifyEnrolledStudents(
+        courseId,
+        'LESSON_PUBLISHED',
+        'Nueva lección disponible',
+        `Se publicó la lección "${updatedLesson.title}" en ${course.name}.`,
+        `/app/courses/${courseId}/modules/${moduleId}/lessons/${updatedLesson.id}`
+      );
+    }
 
     return {
       id: updatedLesson.id,
@@ -534,6 +720,8 @@ export class ContentService {
       content: updatedLesson.content,
       order: updatedLesson.order,
       isPublished: updatedLesson.isPublished,
+      scheduledPublishAt: updatedLesson.scheduledPublishAt,
+      publishedAt: updatedLesson.publishedAt,
       createdAt: updatedLesson.createdAt,
       updatedAt: updatedLesson.updatedAt,
     };
@@ -700,8 +888,8 @@ export class ContentService {
       },
     });
 
-    if (!enrollment) {
-      throw new AuthError('Acceso denegado: no estás inscrito en este curso', 403, 'FORBIDDEN');
+    if (!enrollment || enrollment.status !== EnrollmentStatus.ACTIVE) {
+      throw new AuthError('Acceso denegado: no estás inscrito activamente en este curso', 403, 'FORBIDDEN');
     }
 
     const moduleObj = await prisma.module.findUnique({
@@ -755,5 +943,394 @@ export class ContentService {
     }
 
     return { completed };
+  }
+
+  /**
+   * Configura de forma atómica la programación del módulo y de su contenido pedagógico selectivo.
+   */
+  public static async scheduleModuleBatch(
+    courseId: string,
+    moduleId: string,
+    input: ScheduleModuleBatchInput,
+    user: { id: string; role: Role }
+  ): Promise<ScheduleModuleBatchResultDTO> {
+    const course = await ContentService.validateCourseAccess(courseId, user);
+    ContentService.validateCourseEditable(course, user);
+
+    const moduleObj = await prisma.module.findUnique({
+      where: { id: moduleId },
+    });
+
+    if (!moduleObj || moduleObj.courseId !== courseId) {
+      throw new AuthError('Módulo no encontrado en este curso', 404, 'MODULE_NOT_FOUND');
+    }
+
+    // Validar fecha del módulo si se proporciona
+    let moduleScheduledPublishAt: Date | null | undefined = undefined;
+    if (input.moduleScheduledPublishAt !== undefined) {
+      if (input.moduleScheduledPublishAt === null) {
+        moduleScheduledPublishAt = null;
+      } else {
+        const parsedDate = new Date(input.moduleScheduledPublishAt);
+        if (isNaN(parsedDate.getTime())) {
+          throw new AuthError('La fecha de publicación del módulo es inválida', 400, 'BAD_REQUEST');
+        }
+        if (parsedDate.getTime() <= Date.now()) {
+          throw new AuthError('La fecha de publicación programada debe ser en el futuro', 400, 'SCHEDULED_DATE_MUST_BE_FUTURE');
+        }
+        moduleScheduledPublishAt = parsedDate;
+      }
+    }
+
+    // Validar contents si se proporcionan
+    const contentsInput = input.contents || [];
+    const seenIds = new Set<string>();
+
+    for (const item of contentsInput) {
+      if (!item.id || typeof item.id !== 'string') {
+        throw new AuthError('Identificador de contenido inválido', 400, 'BAD_REQUEST');
+      }
+      if (seenIds.has(item.id)) {
+        throw new AuthError('No se permiten IDs de contenido duplicados en la misma solicitud', 400, 'DUPLICATE_CONTENT_IDS');
+      }
+      seenIds.add(item.id);
+
+      if (item.type !== 'LESSON' && item.type !== 'ASSESSMENT') {
+        throw new AuthError('Tipo de contenido no soportado para programación', 400, 'BAD_REQUEST');
+      }
+
+      if (item.action === 'SCHEDULE' || (item.scheduledPublishAt !== undefined && item.scheduledPublishAt !== null)) {
+        if (!item.scheduledPublishAt) {
+          throw new AuthError('Se requiere una fecha de publicación para programar el contenido', 400, 'BAD_REQUEST');
+        }
+        const parsedDate = new Date(item.scheduledPublishAt);
+        if (isNaN(parsedDate.getTime())) {
+          throw new AuthError('Fecha de publicación de contenido inválida', 400, 'BAD_REQUEST');
+        }
+        if (parsedDate.getTime() <= Date.now()) {
+          throw new AuthError('La fecha de publicación programada debe ser en el futuro', 400, 'SCHEDULED_DATE_MUST_BE_FUTURE');
+        }
+      }
+
+      if (item.type === 'LESSON') {
+        const lesson = await prisma.lesson.findUnique({
+          where: { id: item.id },
+        });
+        if (!lesson) {
+          throw new AuthError(`Lección ${item.id} no encontrada`, 404, 'LESSON_NOT_FOUND');
+        }
+        if (lesson.moduleId !== moduleId) {
+          throw new AuthError('La lección no pertenece al módulo especificado', 400, 'LESSON_MODULE_MISMATCH');
+        }
+      } else if (item.type === 'ASSESSMENT') {
+        const assessment = await prisma.assessment.findUnique({
+          where: { id: item.id },
+        });
+        if (!assessment) {
+          throw new AuthError(`Evaluación ${item.id} no encontrada`, 404, 'ASSESSMENT_NOT_FOUND');
+        }
+        if (assessment.courseId !== courseId) {
+          throw new AuthError('La evaluación no pertenece a este curso', 400, 'ASSESSMENT_COURSE_MISMATCH');
+        }
+        if (assessment.moduleId !== moduleId) {
+          throw new AuthError('La evaluación no pertenece a este módulo', 400, 'ASSESSMENT_MODULE_MISMATCH');
+        }
+      }
+    }
+
+    // Ejecutar actualización atómica en transacción
+    await prisma.$transaction(async (tx) => {
+      // 1. Módulo
+      if (moduleScheduledPublishAt !== undefined) {
+        if (moduleScheduledPublishAt === null) {
+          await tx.module.update({
+            where: { id: moduleId },
+            data: {
+              scheduledPublishAt: null,
+            },
+          });
+        } else {
+          await tx.module.update({
+            where: { id: moduleId },
+            data: {
+              scheduledPublishAt: moduleScheduledPublishAt,
+              isPublished: false,
+              publishedAt: null,
+            },
+          });
+        }
+      }
+
+      // 2. Contenidos selectivos
+      for (const item of contentsInput) {
+        const isUnschedule = item.action === 'UNSCHEDULE' || item.scheduledPublishAt === null;
+        if (isUnschedule) {
+          if (item.type === 'LESSON') {
+            await tx.lesson.update({
+              where: { id: item.id },
+              data: {
+                scheduledPublishAt: null,
+              },
+            });
+          } else if (item.type === 'ASSESSMENT') {
+            await tx.assessment.update({
+              where: { id: item.id },
+              data: {
+                scheduledPublishAt: null,
+              },
+            });
+          }
+        } else {
+          const parsedDate = new Date(item.scheduledPublishAt!);
+          if (item.type === 'LESSON') {
+            await tx.lesson.update({
+              where: { id: item.id },
+              data: {
+                scheduledPublishAt: parsedDate,
+                isPublished: false,
+                publishedAt: null,
+              },
+            });
+          } else if (item.type === 'ASSESSMENT') {
+            await tx.assessment.update({
+              where: { id: item.id },
+              data: {
+                scheduledPublishAt: parsedDate,
+                isPublished: false,
+                publishedAt: null,
+              },
+            });
+          }
+        }
+      }
+    });
+
+    // Obtener módulo y contenidos actualizados
+    const updatedModule = await prisma.module.findUniqueOrThrow({
+      where: { id: moduleId },
+    });
+
+    const updatedLessons = await prisma.lesson.findMany({
+      where: { moduleId },
+      orderBy: { order: 'asc' },
+    });
+
+    const updatedAssessments = await prisma.assessment.findMany({
+      where: { moduleId },
+    });
+
+    const contentsResult: ScheduleModuleBatchContentResultDTO[] = [
+      ...updatedLessons.map((l) => ({
+        type: 'LESSON' as const,
+        id: l.id,
+        title: l.title,
+        isPublished: l.isPublished,
+        scheduledPublishAt: l.scheduledPublishAt,
+        publishedAt: l.publishedAt,
+      })),
+      ...updatedAssessments.map((a) => ({
+        type: 'ASSESSMENT' as const,
+        id: a.id,
+        title: a.title,
+        isPublished: a.isPublished,
+        scheduledPublishAt: a.scheduledPublishAt,
+        publishedAt: a.publishedAt,
+      })),
+    ];
+
+    return {
+      module: {
+        id: updatedModule.id,
+        title: updatedModule.title,
+        isPublished: updatedModule.isPublished,
+        scheduledPublishAt: updatedModule.scheduledPublishAt,
+        publishedAt: updatedModule.publishedAt,
+      },
+      contents: contentsResult,
+    };
+  }
+
+  /**
+   * Publica de forma inmediata el módulo y opcionalmente el contenido interno pendiente especificado.
+   */
+  public static async publishModuleNow(
+    courseId: string,
+    moduleId: string,
+    input: PublishModuleNowInput,
+    user: { id: string; role: Role }
+  ): Promise<PublishModuleNowResultDTO> {
+    const course = await ContentService.validateCourseAccess(courseId, user);
+    ContentService.validateCourseEditable(course, user);
+
+    const moduleObj = await prisma.module.findUnique({
+      where: { id: moduleId },
+    });
+
+    if (!moduleObj || moduleObj.courseId !== courseId) {
+      throw new AuthError('Módulo no encontrado en este curso', 404, 'MODULE_NOT_FOUND');
+    }
+
+    const publishContentIds = input.publishContentIds || [];
+    const publishModuleOnly = input.publishModuleOnly ?? false;
+
+    const seenIds = new Set<string>();
+    for (const id of publishContentIds) {
+      if (seenIds.has(id)) {
+        throw new AuthError('No se permiten IDs duplicados en la solicitud', 400, 'DUPLICATE_CONTENT_IDS');
+      }
+      seenIds.add(id);
+    }
+
+    // Validar pertenencia de todos los IDs solicitados
+    if (!publishModuleOnly && publishContentIds.length > 0) {
+      for (const id of publishContentIds) {
+        const lesson = await prisma.lesson.findUnique({ where: { id } });
+        if (lesson) {
+          if (lesson.moduleId !== moduleId) {
+            throw new AuthError('Uno o más contenidos no pertenecen a este módulo', 400, 'CONTENT_MODULE_MISMATCH');
+          }
+          continue;
+        }
+
+        const assessment = await prisma.assessment.findUnique({ where: { id } });
+        if (assessment) {
+          if (assessment.courseId !== courseId || assessment.moduleId !== moduleId) {
+            throw new AuthError('Uno o más contenidos no pertenecen a este módulo', 400, 'CONTENT_MODULE_MISMATCH');
+          }
+          continue;
+        }
+
+        throw new AuthError(`Contenido ${id} no encontrado en este módulo`, 404, 'CONTENT_NOT_FOUND');
+      }
+    }
+
+    const now = new Date();
+    let moduleWasPublished = false;
+    const newlyPublishedLessons: { id: string; title: string }[] = [];
+    const newlyPublishedAssessments: { id: string; title: string }[] = [];
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Publicar módulo
+      if (!moduleObj.isPublished) {
+        await tx.module.update({
+          where: { id: moduleId },
+          data: {
+            isPublished: true,
+            publishedAt: moduleObj.publishedAt || now,
+            scheduledPublishAt: null,
+          },
+        });
+        moduleWasPublished = true;
+      }
+
+      // 2. Publicar contenidos si corresponde
+      if (!publishModuleOnly && publishContentIds.length > 0) {
+        for (const id of publishContentIds) {
+          const lesson = await tx.lesson.findUnique({ where: { id } });
+          if (lesson && !lesson.isPublished) {
+            await tx.lesson.update({
+              where: { id },
+              data: {
+                isPublished: true,
+                publishedAt: lesson.publishedAt || now,
+                scheduledPublishAt: null,
+              },
+            });
+            newlyPublishedLessons.push({ id: lesson.id, title: lesson.title });
+          }
+
+          const assessment = await tx.assessment.findUnique({ where: { id } });
+          if (assessment && !assessment.isPublished) {
+            await tx.assessment.update({
+              where: { id },
+              data: {
+                isPublished: true,
+                publishedAt: assessment.publishedAt || now,
+                scheduledPublishAt: null,
+              },
+            });
+            newlyPublishedAssessments.push({ id: assessment.id, title: assessment.title });
+          }
+        }
+      }
+    });
+
+    // Enviar notificaciones in-app
+    if (moduleWasPublished) {
+      await ContentService.notifyEnrolledStudents(
+        courseId,
+        'MODULE_PUBLISHED',
+        'Nuevo módulo disponible',
+        `El módulo "${moduleObj.title}" ya está disponible en ${course.name}.`,
+        `/app/courses/${courseId}`
+      );
+    }
+
+    for (const l of newlyPublishedLessons) {
+      await ContentService.notifyEnrolledStudents(
+        courseId,
+        'LESSON_PUBLISHED',
+        'Nueva lección disponible',
+        `Se publicó la lección "${l.title}" en ${course.name}.`,
+        `/app/courses/${courseId}/modules/${moduleId}/lessons/${l.id}`
+      );
+    }
+
+    for (const a of newlyPublishedAssessments) {
+      await ContentService.notifyEnrolledStudents(
+        courseId,
+        'ASSESSMENT_PUBLISHED',
+        'Nueva evaluación disponible',
+        `Se ha publicado la evaluación "${a.title}" en ${course.name}.`,
+        `/app/courses/${courseId}`
+      );
+    }
+
+    // Obtener módulo y contenidos actualizados
+    const updatedModule = await prisma.module.findUniqueOrThrow({
+      where: { id: moduleId },
+    });
+
+    const updatedLessons = await prisma.lesson.findMany({
+      where: { moduleId },
+      orderBy: { order: 'asc' },
+    });
+
+    const updatedAssessments = await prisma.assessment.findMany({
+      where: { moduleId },
+    });
+
+    const contentsResult: ScheduleModuleBatchContentResultDTO[] = [
+      ...updatedLessons.map((l) => ({
+        type: 'LESSON' as const,
+        id: l.id,
+        title: l.title,
+        isPublished: l.isPublished,
+        scheduledPublishAt: l.scheduledPublishAt,
+        publishedAt: l.publishedAt,
+      })),
+      ...updatedAssessments.map((a) => ({
+        type: 'ASSESSMENT' as const,
+        id: a.id,
+        title: a.title,
+        isPublished: a.isPublished,
+        scheduledPublishAt: a.scheduledPublishAt,
+        publishedAt: a.publishedAt,
+      })),
+    ];
+
+    const publishedContentCount = newlyPublishedLessons.length + newlyPublishedAssessments.length;
+
+    return {
+      module: {
+        id: updatedModule.id,
+        title: updatedModule.title,
+        isPublished: updatedModule.isPublished,
+        scheduledPublishAt: updatedModule.scheduledPublishAt,
+        publishedAt: updatedModule.publishedAt,
+      },
+      publishedContentCount,
+      contents: contentsResult,
+    };
   }
 }

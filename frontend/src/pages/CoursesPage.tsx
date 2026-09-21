@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Course, CourseStatus, Subject } from '../types/academic.js';
 import { CourseServiceAPI } from '../services/course.service.js';
 import { SubjectServiceAPI } from '../services/subject.service.js';
 import { useAuth } from '../auth/useAuth.js';
 import { ApiError } from '../services/api.js';
+import { PageLoading, ButtonSpinner } from '../components/common/loading/index.js';
 
 export const CoursesPage: React.FC = () => {
   const { user } = useAuth();
@@ -14,6 +15,9 @@ export const CoursesPage: React.FC = () => {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Estado para el filtro de materia
+  const [selectedSubjectId, setSelectedSubjectId] = useState<string>('ALL');
 
   // Modal para Nuevo Curso
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -50,6 +54,27 @@ export const CoursesPage: React.FC = () => {
   useEffect(() => {
     fetchCoursesAndSubjects();
   }, [fetchCoursesAndSubjects]);
+
+  // Derivar únicamente las materias presentes en los cursos visibles del usuario
+  const availableSubjects = useMemo(() => {
+    const map = new Map<string, { id: string; code: string; name: string }>();
+    courses.forEach((c) => {
+      if (c.subjectId && c.subject) {
+        map.set(c.subjectId, {
+          id: c.subject.id,
+          code: c.subject.code,
+          name: c.subject.name,
+        });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => a.code.localeCompare(b.code));
+  }, [courses]);
+
+  // Cursos filtrados cliente-side segun la materia seleccionada
+  const filteredCourses = useMemo(() => {
+    if (selectedSubjectId === 'ALL') return courses;
+    return courses.filter((c) => c.subjectId === selectedSubjectId);
+  }, [courses, selectedSubjectId]);
 
   const handleOpenCreateModal = () => {
     setFormSubjectId(subjects.length > 0 ? subjects[0].id : '');
@@ -133,7 +158,7 @@ export const CoursesPage: React.FC = () => {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '16px' }}>
         <div>
           <h1 className="page-title" id="courses-page-title">
             {getTitleByRole()}
@@ -159,16 +184,72 @@ export const CoursesPage: React.FC = () => {
       </div>
 
       {errorMessage && (
-        <div className="alert alert-danger" id="courses-error-alert">
+        <div className="alert alert-danger" id="courses-error-alert" style={{ marginBottom: '16px' }}>
           {errorMessage}
         </div>
       )}
 
-      {loading ? (
-        <div className="loading-content" style={{ padding: '40px 0' }}>
-          <div className="loading-spinner" />
-          <p className="loading-text">Cargando cursos...</p>
+      {/* Filter Toolbar (Visible when courses exist) */}
+      {!loading && courses.length > 0 && (
+        <div
+          id="courses-filter-bar"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '16px',
+            marginBottom: '20px',
+            flexWrap: 'wrap',
+            backgroundColor: 'var(--color-surface)',
+            padding: '12px 16px',
+            borderRadius: 'var(--radius-md, 8px)',
+            border: '1px solid var(--color-border)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', flex: 1, minWidth: '240px' }}>
+            <label
+              htmlFor="filter-subject-select"
+              style={{
+                fontSize: '0.875rem',
+                fontWeight: 600,
+                color: 'var(--color-text)',
+                whiteSpace: 'nowrap',
+                margin: 0,
+              }}
+            >
+              Materia
+            </label>
+            <select
+              id="filter-subject-select"
+              className="form-input"
+              value={selectedSubjectId}
+              onChange={(e) => setSelectedSubjectId(e.target.value)}
+              aria-label="Filtrar cursos por materia"
+              style={{
+                width: 'auto',
+                minWidth: '240px',
+                maxWidth: '100%',
+                fontSize: '0.875rem',
+                padding: '6px 12px',
+              }}
+            >
+              <option value="ALL">Todas las materias ({courses.length})</option>
+              {availableSubjects.map((sub) => (
+                <option key={sub.id} value={sub.id}>
+                  {sub.code} — {sub.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ fontSize: '0.825rem', color: 'var(--color-muted)' }}>
+            Mostrando {filteredCourses.length} de {courses.length} {courses.length === 1 ? 'curso' : 'cursos'}
+          </div>
         </div>
+      )}
+
+      {loading ? (
+        <PageLoading title="Cargando cursos..." />
       ) : courses.length === 0 ? (
         <div className="dashboard-card" style={{ textAlign: 'center', padding: '40px 20px' }}>
           <h3 className="dashboard-card-title">Aún no hay cursos para mostrar</h3>
@@ -188,9 +269,27 @@ export const CoursesPage: React.FC = () => {
             </button>
           )}
         </div>
+      ) : filteredCourses.length === 0 ? (
+        <div className="dashboard-card" id="courses-filter-empty-state" style={{ textAlign: 'center', padding: '40px 20px' }}>
+          <h3 className="dashboard-card-title" style={{ fontSize: '1.05rem', marginBottom: '8px' }}>
+            Sin cursos en esta materia
+          </h3>
+          <p className="dashboard-card-desc" style={{ marginBottom: '20px', fontSize: '0.875rem' }}>
+            No hay cursos disponibles para la materia seleccionada.
+          </p>
+          <button
+            type="button"
+            id="btn-reset-subject-filter"
+            className="btn-secondary"
+            style={{ width: 'auto', margin: '0 auto', fontSize: '0.875rem', padding: '8px 20px' }}
+            onClick={() => setSelectedSubjectId('ALL')}
+          >
+            Ver todas las materias
+          </button>
+        </div>
       ) : (
         <div className="dashboard-grid">
-          {courses.map((course) => (
+          {filteredCourses.map((course) => (
             <div className="dashboard-card" key={course.id} id={`course-card-${course.id}`}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
                 <span className="role-pill teacher" style={{ fontSize: '0.75rem' }}>
@@ -263,7 +362,7 @@ export const CoursesPage: React.FC = () => {
                 <div className="alert alert-danger" style={{ marginBottom: '16px' }}>
                   {user?.role === 'ADMIN'
                     ? 'No hay materias registradas en la plataforma. Debes registrar al menos una materia antes de poder crear un curso.'
-                    : 'No hay materias disponibles en la plataforma. Solicita al administrador registrar una materia.'}
+                    : 'No tienes materias asignadas para crear cursos. Solicita al administrador que te asigne una materia.'}
                 </div>
                 <div style={{ display: 'flex', gap: '12px' }}>
                   <button
@@ -392,7 +491,7 @@ export const CoursesPage: React.FC = () => {
                     style={{ flex: 1 }}
                     disabled={formSubmitting}
                   >
-                    {formSubmitting ? 'Creando curso...' : 'Crear curso'}
+                    {formSubmitting ? <><ButtonSpinner /> Creando curso...</> : 'Crear curso'}
                   </button>
                 </div>
               </form>

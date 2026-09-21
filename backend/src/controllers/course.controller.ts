@@ -317,4 +317,33 @@ export class CourseController {
       res.status(500).json({ error: { code: 'INTERNAL_SERVER_ERROR', message: 'Error interno del servidor' } });
     }
   }
+
+  /**
+   * PATCH /api/courses/:courseId/students/:studentId/drop
+   * Retira lógicamente a un alumno del curso cambiando su Enrollment.status a DROPPED.
+   */
+  public static async dropStudent(req: Request, res: Response): Promise<void> {
+    try {
+      const { courseId, studentId } = req.params;
+
+      if (!req.user) {
+        res.status(401).json({
+          error: {
+            code: 'UNAUTHORIZED',
+            message: 'No autorizado',
+          },
+        });
+        return;
+      }
+
+      const result = await UserProvisioningService.dropStudent(courseId, studentId);
+      res.status(200).json({ data: result });
+    } catch (error: unknown) {
+      if (error instanceof AuthError) {
+        res.status(error.statusCode).json({ error: { code: error.code, message: error.message } });
+        return;
+      }
+      res.status(500).json({ error: { code: 'INTERNAL_SERVER_ERROR', message: 'Error interno del servidor' } });
+    }
+  }
 }

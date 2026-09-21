@@ -26,21 +26,20 @@ import { TeacherGradingListPage } from '../pages/TeacherGradingListPage.js';
 import { TeacherAttemptReviewPage } from '../pages/TeacherAttemptReviewPage.js';
 import { TeacherGradebookPage } from '../pages/TeacherGradebookPage.js';
 import { StudentGradesPage } from '../pages/StudentGradesPage.js';
+import { AssessmentPreviewPage } from '../pages/AssessmentPreviewPage.js';
 
+
+import { TeacherStudentsPage } from '../pages/TeacherStudentsPage.js';
+import { TeachersPage } from '../pages/TeachersPage.js';
+import { ProgressPage } from '../pages/ProgressPage.js';
+
+import { PageLoading } from '../components/common/loading/index.js';
 
 const RootRedirect: React.FC = () => {
   const { user, status } = useAuth();
 
   if (status === 'loading') {
-    return (
-      <div className="loading-screen" id="loading-screen">
-        <div className="loading-content">
-          <div className="loading-logo">PotroLearn</div>
-          <div className="loading-spinner" />
-          <p className="loading-text">Cargando...</p>
-        </div>
-      </div>
-    );
+    return <PageLoading title="Restaurando tu sesión" description="Verificando tu acceso..." />;
   }
 
   if (status === 'authenticated') {
@@ -52,30 +51,6 @@ const RootRedirect: React.FC = () => {
 
   return <Navigate to="/login" replace />;
 };
-
-const AdminTeachersPlaceholder: React.FC = () => (
-  <div>
-    <h1 className="page-title">Gestión de Maestros</h1>
-    <p className="page-description">Módulo de administración para registro y asignación de docentes.</p>
-    <div className="alert alert-success">Sección activa para el rol de Administrador.</div>
-  </div>
-);
-
-const TeacherStudentsPlaceholder: React.FC = () => (
-  <div>
-    <h1 className="page-title">Alumnos Inscritos</h1>
-    <p className="page-description">Gestión e inscripción de alumnos asignados a tus cursos.</p>
-    <div className="alert alert-success">Sección activa para el rol de Maestro.</div>
-  </div>
-);
-
-const StudentProgressPlaceholder: React.FC = () => (
-  <div>
-    <h1 className="page-title">Mi Progreso Académico</h1>
-    <p className="page-description">Seguimiento detallado de tu avance en los contenidos y evaluaciones.</p>
-    <div className="alert alert-success">Sección activa para el rol de Alumno.</div>
-  </div>
-);
 
 export const AppRoutes: React.FC = () => {
   return (
@@ -117,7 +92,7 @@ export const AppRoutes: React.FC = () => {
         {/* Materias y Administración (Exclusivo ADMIN) */}
         <Route element={<RoleRoute allowedRoles={['ADMIN']} />}>
           <Route path="subjects" element={<SubjectsPage />} />
-          <Route path="teachers" element={<AdminTeachersPlaceholder />} />
+          <Route path="teachers" element={<TeachersPage />} />
           <Route path="admin/users" element={<AdminUsersPage />} />
         </Route>
 
@@ -137,16 +112,17 @@ export const AppRoutes: React.FC = () => {
 
         {/* Alumnos y Calificación de Evaluaciones (ADMIN, TEACHER) */}
         <Route element={<RoleRoute allowedRoles={['ADMIN', 'TEACHER']} />}>
-          <Route path="students" element={<TeacherStudentsPlaceholder />} />
+          <Route path="students" element={<TeacherStudentsPage />} />
           <Route path="assessments/:assessmentId/grading" element={<TeacherGradingListPage />} />
           <Route path="courses/:courseId/assessments/:assessmentId/grading" element={<TeacherGradingListPage />} />
+          <Route path="courses/:courseId/assessments/:assessmentId/preview" element={<AssessmentPreviewPage />} />
           <Route path="attempts/:attemptId/review" element={<TeacherAttemptReviewPage />} />
           <Route path="courses/:courseId/gradebook" element={<TeacherGradebookPage />} />
         </Route>
 
         {/* Progreso y Calificaciones del Estudiante (STUDENT) */}
         <Route element={<RoleRoute allowedRoles={['STUDENT']} />}>
-          <Route path="progress" element={<StudentProgressPlaceholder />} />
+          <Route path="progress" element={<ProgressPage />} />
           <Route path="courses/:courseId/my-grades" element={<StudentGradesPage />} />
         </Route>
       </Route>

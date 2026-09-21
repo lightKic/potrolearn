@@ -4,6 +4,7 @@ import { AuthLayout } from '../layouts/AuthLayout.js';
 import { AuthServiceAPI } from '../services/auth.service.js';
 import { useAuth } from '../auth/useAuth.js';
 import { ApiError } from '../services/api.js';
+import { SectionLoading, ButtonSpinner } from '../components/common/loading/index.js';
 
 export const ActivatePage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -112,10 +113,7 @@ export const ActivatePage: React.FC = () => {
   if (validatingToken) {
     return (
       <AuthLayout subtitle="Validando invitación de cuenta...">
-        <div className="loading-content" style={{ padding: '20px 0' }}>
-          <div className="loading-spinner" />
-          <p className="loading-text">Validando enlace de activación...</p>
-        </div>
+        <SectionLoading title="Validando enlace de activación..." />
       </AuthLayout>
     );
   }
@@ -233,7 +231,7 @@ export const ActivatePage: React.FC = () => {
           className="btn-primary"
           disabled={submitting}
         >
-          {submitting ? 'Activando cuenta...' : 'Activar cuenta'}
+          {submitting ? <><ButtonSpinner /> Activando cuenta...</> : 'Activar cuenta'}
         </button>
       </form>
     </AuthLayout>

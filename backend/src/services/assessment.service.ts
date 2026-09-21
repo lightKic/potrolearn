@@ -1,7 +1,8 @@
-import { Role, AssessmentType, Prisma } from '@prisma/client';
+import { Role, AssessmentType, QuestionType, Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { QuestionService } from './question.service';
 import { GradebookService } from './gradebook.service';
+import { NotificationService } from './notification.service';
 import { AuthError } from '../types/auth.types';
 import {
   CreateAssessmentInput,
@@ -10,7 +11,15 @@ import {
   ReorderQuestionsInput,
   AssessmentDTO,
   StudentAssessmentDTO,
+  CrosswordLayout,
+  CrosswordLayoutEntry,
+  StudentCrosswordLayout,
 } from '../types/assessment.types';
+import {
+  CrosswordGeneratorUtil,
+  CrosswordGeneratorResult,
+  CrosswordInputEntry,
+} from '../utils/crossword-generator.util';
 
 export class AssessmentService {
   /**
@@ -147,6 +156,25 @@ export class AssessmentService {
       throw new AuthError('availableFrom no puede ser posterior a availableUntil', 400, 'BAD_REQUEST');
     }
 
+    let scheduledPublishAt: Date | null = null;
+    let isPublished = input.isPublished ?? false;
+    let publishedAt: Date | null = isPublished ? new Date() : null;
+
+    if (input.scheduledPublishAt) {
+      const parsedDate = new Date(input.scheduledPublishAt);
+      if (isNaN(parsedDate.getTime())) {
+        throw new AuthError('La fecha de publicación programada es inválida', 400, 'BAD_REQUEST');
+      }
+      if (parsedDate.getTime() <= Date.now()) {
+        throw new AuthError('La fecha de publicación programada debe ser en el futuro', 400, 'SCHEDULED_DATE_MUST_BE_FUTURE');
+      }
+      scheduledPublishAt = parsedDate;
+      isPublished = false;
+      publishedAt = null;
+    } else if (input.scheduledPublishAt === null) {
+      scheduledPublishAt = null;
+    }
+
     await this.validateModuleAndLessonScope(courseId, input.moduleId, input.lessonId);
 
     const created = await prisma.assessment.create({
@@ -163,9 +191,28 @@ export class AssessmentService {
         timeLimitMinutes,
         availableFrom: fromDate,
         availableUntil: untilDate,
-        isPublished: false,
+        isPublished,
+        scheduledPublishAt,
+        publishedAt,
       },
     });
+
+    if (created.isPublished) {
+      const course = await prisma.course.findUnique({ where: { id: courseId } });
+      const enrollments = await prisma.enrollment.findMany({
+        where: { courseId, status: 'ACTIVE' },
+        select: { studentId: true },
+      });
+      for (const env of enrollments) {
+        await NotificationService.createNotification({
+          userId: env.studentId,
+          type: 'ASSESSMENT_PUBLISHED',
+          title: 'Nueva evaluación disponible',
+          message: `Se ha publicado la evaluación "${created.title}" en ${course?.name || 'tu curso'}.`,
+          link: `/app/courses/${courseId}`,
+        });
+      }
+    }
 
     return this.mapToDTO(created);
   }
@@ -351,6 +398,24 @@ export class AssessmentService {
       if (input.passingScore !== undefined && input.passingScore !== (existing.passingScore ? existing.passingScore.toNumber() : null)) {
         throw new AuthError('No se puede modificar el puntaje de aprobación en un assessment con historial de intentos', 409, 'ASSESSMENT_HAS_ATTEMPTS');
       }
+      if (input.crosswordLayout !== undefined && JSON.stringify(input.crosswordLayout) !== JSON.stringify(existing.crosswordLayout)) {
+        throw new AuthError('No se puede modificar la grilla o el layout de un crucigrama con historial de intentos', 409, 'ASSESSMENT_HAS_ATTEMPTS');
+      }
+    }
+
+    let crosswordLayoutData: any = undefined;
+    if (input.crosswordLayout !== undefined) {
+      if (input.crosswordLayout === null) {
+        crosswordLayoutData = Prisma.DbNull;
+      } else {
+        const assessmentQuestions = await prisma.assessmentQuestion.findMany({
+          where: { assessmentId },
+          select: { questionId: true },
+        });
+        const validQuestionIds = assessmentQuestions.map((aq) => aq.questionId);
+        const validatedLayout = this.validateCrosswordLayout(input.crosswordLayout, validQuestionIds);
+        crosswordLayoutData = validatedLayout;
+      }
     }
 
     const title = input.title !== undefined ? input.title.trim() : existing.title;
@@ -396,8 +461,82 @@ export class AssessmentService {
     const targetLessonId = input.lessonId !== undefined ? input.lessonId : existing.lessonId;
     await this.validateModuleAndLessonScope(existing.courseId, targetModuleId, targetLessonId);
 
-    if (existing.isPublished) {
-      await GradebookService.validateCourseWeights(existing.courseId, assessmentId, weight);
+    let scheduledPublishAt: Date | null | undefined = undefined;
+    let isPublished: boolean | undefined = undefined;
+    let publishedAt: Date | null | undefined = undefined;
+
+    if (input.scheduledPublishAt !== undefined) {
+      if (input.scheduledPublishAt === null) {
+        scheduledPublishAt = null;
+        if (input.isPublished !== undefined) {
+          isPublished = input.isPublished;
+          if (input.isPublished && !existing.publishedAt) {
+            publishedAt = new Date();
+          }
+        }
+      } else {
+        const parsedDate = new Date(input.scheduledPublishAt);
+        if (isNaN(parsedDate.getTime())) {
+          throw new AuthError('La fecha de publicación programada es inválida', 400, 'BAD_REQUEST');
+        }
+        if (parsedDate.getTime() <= Date.now()) {
+          throw new AuthError('La fecha de publicación programada debe ser en el futuro', 400, 'SCHEDULED_DATE_MUST_BE_FUTURE');
+        }
+        scheduledPublishAt = parsedDate;
+        isPublished = false;
+        publishedAt = null;
+      }
+    } else if (input.isPublished !== undefined) {
+      isPublished = input.isPublished;
+      if (input.isPublished) {
+        scheduledPublishAt = null;
+        if (!existing.publishedAt) {
+          publishedAt = new Date();
+        }
+      }
+    }
+
+    const targetType = type || existing.type;
+    const isTargetPublished = isPublished !== undefined ? isPublished : existing.isPublished;
+    if (isTargetPublished && targetType === AssessmentType.CROSSWORD) {
+      const currentAq = await prisma.assessmentQuestion.findMany({
+        where: { assessmentId },
+        include: { question: true },
+      });
+
+      if (currentAq.length === 0) {
+        throw new AuthError('No se puede publicar un crucigrama sin preguntas agregadas', 400, 'CANNOT_PUBLISH_INCOMPLETE_CROSSWORD');
+      }
+
+      const nonClueQuestions = currentAq.filter((aq) => aq.question.type !== QuestionType.CROSSWORD_CLUE);
+      if (nonClueQuestions.length > 0) {
+        throw new AuthError(
+          'No se puede publicar un crucigrama con preguntas que no sean de tipo CROSSWORD_CLUE',
+          400,
+          'CANNOT_PUBLISH_INCOMPLETE_CROSSWORD'
+        );
+      }
+
+      const activeLayout = crosswordLayoutData !== undefined ? crosswordLayoutData : existing.crosswordLayout;
+      const layoutEntries: any[] = (activeLayout as any)?.entries || [];
+      if (!activeLayout || layoutEntries.length === 0 || layoutEntries.length !== currentAq.length) {
+        throw new AuthError(
+          `No se puede publicar el crucigrama. Hay ${currentAq.length} preguntas en la evaluación, pero solo ${layoutEntries.length} están guardadas en el layout.`,
+          400,
+          'CANNOT_PUBLISH_INCOMPLETE_CROSSWORD'
+        );
+      }
+
+      const layoutQuestionIds = new Set(layoutEntries.map((e) => e.questionId));
+      for (const aq of currentAq) {
+        if (!layoutQuestionIds.has(aq.questionId)) {
+          throw new AuthError(
+            `No se puede publicar el crucigrama. La pregunta '${aq.question.statement}' no forma parte del layout guardado.`,
+            400,
+            'CANNOT_PUBLISH_INCOMPLETE_CROSSWORD'
+          );
+        }
+      }
     }
 
     const updated = await prisma.assessment.update({
@@ -414,6 +553,10 @@ export class AssessmentService {
         availableUntil: untilDate,
         moduleId: targetModuleId,
         lessonId: targetLessonId,
+        ...(isPublished !== undefined ? { isPublished } : {}),
+        ...(scheduledPublishAt !== undefined ? { scheduledPublishAt } : {}),
+        ...(publishedAt !== undefined ? { publishedAt } : {}),
+        ...(crosswordLayoutData !== undefined ? { crosswordLayout: crosswordLayoutData } : {}),
       },
       include: {
         assessmentQuestions: {
@@ -430,6 +573,23 @@ export class AssessmentService {
         },
       },
     });
+
+    if (updated.isPublished && !existing.isPublished) {
+      const course = await prisma.course.findUnique({ where: { id: existing.courseId } });
+      const enrollments = await prisma.enrollment.findMany({
+        where: { courseId: existing.courseId, status: 'ACTIVE' },
+        select: { studentId: true },
+      });
+      for (const env of enrollments) {
+        await NotificationService.createNotification({
+          userId: env.studentId,
+          type: 'ASSESSMENT_PUBLISHED',
+          title: 'Nueva evaluación disponible',
+          message: `Se ha publicado la evaluación "${updated.title}" en ${course?.name || 'tu curso'}.`,
+          link: `/app/courses/${existing.courseId}`,
+        });
+      }
+    }
 
     return this.mapToDTO(updated);
   }
@@ -525,7 +685,11 @@ export class AssessmentService {
 
     const updated = await prisma.assessment.update({
       where: { id: assessmentId },
-      data: { isPublished },
+      data: {
+        isPublished,
+        scheduledPublishAt: null,
+        publishedAt: isPublished ? (assessment.publishedAt || new Date()) : assessment.publishedAt,
+      },
       include: {
         assessmentQuestions: {
           orderBy: { order: 'asc' },
@@ -541,6 +705,55 @@ export class AssessmentService {
         },
       },
     });
+
+    if (isPublished && !assessment.isPublished) {
+      try {
+        const course = await prisma.course.findUnique({
+          where: { id: updated.courseId },
+          select: { name: true },
+        });
+        const enrollments = await prisma.enrollment.findMany({
+          where: { courseId: updated.courseId, status: 'ACTIVE' },
+          select: { studentId: true },
+        });
+
+        let moduleTitle: string | null = null;
+        if (updated.moduleId) {
+          const modRecord = await prisma.module.findUnique({
+            where: { id: updated.moduleId },
+            select: { title: true },
+          });
+          moduleTitle = modRecord?.title || null;
+        }
+
+        const locationText = moduleTitle
+          ? `${moduleTitle} (${course?.name || 'tu curso'})`
+          : course?.name || 'tu curso';
+
+        let notifTitle = 'Nueva evaluación disponible';
+        let notifMessage = `La evaluación "${updated.title}" ya está disponible en ${locationText}.`;
+
+        if (updated.type === 'EXAM') {
+          notifTitle = 'Nuevo examen disponible';
+          notifMessage = `El examen "${updated.title}" ya está disponible en ${locationText}.`;
+        } else if (updated.type === 'FINAL') {
+          notifTitle = 'Nueva evaluación final disponible';
+          notifMessage = `La evaluación final "${updated.title}" ya está disponible en ${locationText}.`;
+        }
+
+        for (const env of enrollments) {
+          await NotificationService.createNotification({
+            userId: env.studentId,
+            type: 'ASSESSMENT_PUBLISHED',
+            title: notifTitle,
+            message: notifMessage,
+            link: `/app/courses/${updated.courseId}/assessments/${updated.id}`,
+          });
+        }
+      } catch (err) {
+        console.error('[NOTIFICATION ERROR] Failed to dispatch ASSESSMENT_PUBLISHED:', err);
+      }
+    }
 
     return this.mapToDTO(updated);
   }
@@ -575,6 +788,14 @@ export class AssessmentService {
     });
     if (!question) {
       throw new AuthError('Pregunta no encontrada', 404, 'QUESTION_NOT_FOUND');
+    }
+
+    if (assessment.type === AssessmentType.CROSSWORD && question.type !== QuestionType.CROSSWORD_CLUE) {
+      throw new AuthError(
+        'Las evaluaciones de tipo CROSSWORD solo permiten agregar preguntas de tipo CROSSWORD_CLUE',
+        400,
+        'INVALID_QUESTION_TYPE'
+      );
     }
 
     // Check if question is already in assessment
@@ -782,6 +1003,126 @@ export class AssessmentService {
   }
 
   /**
+   * Helper: Runtime validation for crosswordLayout JSON structure & limits.
+   */
+  public static validateCrosswordLayout(
+    layout: any,
+    validAssessmentQuestionIds: string[]
+  ): CrosswordLayout {
+    if (!layout || typeof layout !== 'object') {
+      throw new AuthError('El objeto crosswordLayout es requerido y debe ser un objeto válido', 400, 'INVALID_CROSSWORD_LAYOUT');
+    }
+
+    const { gridSize, entries } = layout;
+
+    if (!gridSize || typeof gridSize !== 'object') {
+      throw new AuthError('El campo gridSize es requerido en el crosswordLayout', 400, 'INVALID_CROSSWORD_LAYOUT');
+    }
+
+    const { rows, columns } = gridSize;
+
+    if (typeof rows !== 'number' || !Number.isInteger(rows) || rows < 1 || rows > 20) {
+      throw new AuthError('gridSize.rows debe ser un número entero entre 1 y 20', 400, 'INVALID_CROSSWORD_LAYOUT');
+    }
+
+    if (typeof columns !== 'number' || !Number.isInteger(columns) || columns < 1 || columns > 20) {
+      throw new AuthError('gridSize.columns debe ser un número entero entre 1 y 20', 400, 'INVALID_CROSSWORD_LAYOUT');
+    }
+
+    if (!Array.isArray(entries)) {
+      throw new AuthError('El campo entries debe ser un arreglo de elementos del crucigrama', 400, 'INVALID_CROSSWORD_LAYOUT');
+    }
+
+    if (validAssessmentQuestionIds.length > 0 && entries.length < validAssessmentQuestionIds.length) {
+      throw new AuthError(
+        `No se puede guardar un layout incompleto. Hay ${validAssessmentQuestionIds.length} preguntas en la evaluación, pero solo ${entries.length} pudieron colocarse en el tablero`,
+        400,
+        'INCOMPLETE_CROSSWORD_LAYOUT'
+      );
+    }
+
+    const validQuestionIdSet = new Set(validAssessmentQuestionIds);
+    const seenQuestionIds = new Set<string>();
+
+    const validatedEntries: CrosswordLayoutEntry[] = [];
+
+    for (const entry of entries) {
+      if (!entry || typeof entry !== 'object') {
+        throw new AuthError('Entrada de crucigrama no válida', 400, 'INVALID_CROSSWORD_LAYOUT');
+      }
+
+      const { questionId, number: num, direction, startRow, startCol, length, answerNormalized } = entry;
+
+      if (!questionId || typeof questionId !== 'string') {
+        throw new AuthError('Cada entrada del crucigrama debe especificar un questionId válido', 400, 'INVALID_CROSSWORD_LAYOUT');
+      }
+
+      if (seenQuestionIds.has(questionId)) {
+        throw new AuthError(`El questionId '${questionId}' aparece duplicado en el layout del crucigrama`, 400, 'INVALID_CROSSWORD_LAYOUT');
+      }
+      seenQuestionIds.add(questionId);
+
+      if (validAssessmentQuestionIds.length > 0 && !validQuestionIdSet.has(questionId)) {
+        throw new AuthError(`El questionId '${questionId}' no pertenece a las preguntas asignadas a esta evaluación`, 400, 'INVALID_CROSSWORD_LAYOUT');
+      }
+
+      if (typeof num !== 'number' || !Number.isInteger(num) || num < 1) {
+        throw new AuthError('El número de pista debe ser un entero >= 1', 400, 'INVALID_CROSSWORD_LAYOUT');
+      }
+
+      if (direction !== 'ACROSS' && direction !== 'DOWN') {
+        throw new AuthError("La dirección de la pista debe ser 'ACROSS' o 'DOWN'", 400, 'INVALID_CROSSWORD_LAYOUT');
+      }
+
+      if (typeof startRow !== 'number' || !Number.isInteger(startRow) || startRow < 0 || startRow >= rows) {
+        throw new AuthError(`Fila inicial (startRow ${startRow}) fuera de los límites de la matriz (rows: ${rows})`, 400, 'INVALID_CROSSWORD_LAYOUT');
+      }
+
+      if (typeof startCol !== 'number' || !Number.isInteger(startCol) || startCol < 0 || startCol >= columns) {
+        throw new AuthError(`Columna inicial (startCol ${startCol}) fuera de los límites de la matriz (columns: ${columns})`, 400, 'INVALID_CROSSWORD_LAYOUT');
+      }
+
+      if (typeof length !== 'number' || !Number.isInteger(length) || length < 1) {
+        throw new AuthError('La longitud de la palabra (length) debe ser un entero >= 1', 400, 'INVALID_CROSSWORD_LAYOUT');
+      }
+
+      if (direction === 'ACROSS' && startCol + length > columns) {
+        throw new AuthError(`La palabra horizontal excede el límite derecho de la matriz (startCol: ${startCol}, length: ${length}, columns: ${columns})`, 400, 'INVALID_CROSSWORD_LAYOUT');
+      }
+
+      if (direction === 'DOWN' && startRow + length > rows) {
+        throw new AuthError(`La palabra vertical excede el límite inferior de la matriz (startRow: ${startRow}, length: ${length}, rows: ${rows})`, 400, 'INVALID_CROSSWORD_LAYOUT');
+      }
+
+      if (!answerNormalized || typeof answerNormalized !== 'string') {
+        throw new AuthError('Cada entrada debe incluir answerNormalized', 400, 'INVALID_CROSSWORD_LAYOUT');
+      }
+
+      if (answerNormalized.length !== length) {
+        throw new AuthError(`La longitud de answerNormalized (${answerNormalized.length}) no coincide con el campo length (${length})`, 400, 'INVALID_CROSSWORD_LAYOUT');
+      }
+
+      validatedEntries.push({
+        questionId,
+        number: num,
+        direction,
+        startRow,
+        startCol,
+        length,
+        answerNormalized,
+      });
+    }
+
+    return {
+      gridSize: {
+        rows,
+        columns,
+      },
+      entries: validatedEntries,
+    };
+  }
+
+  /**
    * Map Assessment model to DTO for Admin/Teacher.
    */
   public static mapToDTO(assessment: any): AssessmentDTO {
@@ -818,6 +1159,9 @@ export class AssessmentService {
         ? (assessment.passingScore.toNumber ? assessment.passingScore.toNumber() : Number(assessment.passingScore))
         : null,
       isPublished: assessment.isPublished,
+      scheduledPublishAt: assessment.scheduledPublishAt,
+      publishedAt: assessment.publishedAt,
+      crosswordLayout: assessment.crosswordLayout ? (assessment.crosswordLayout as CrosswordLayout) : null,
       createdAt: assessment.createdAt,
       updatedAt: assessment.updatedAt,
       questions,
@@ -857,6 +1201,20 @@ export class AssessmentService {
         })
       : [];
 
+    const studentLayout: StudentCrosswordLayout | null = assessment.crosswordLayout
+      ? {
+          gridSize: (assessment.crosswordLayout as CrosswordLayout).gridSize,
+          entries: (((assessment.crosswordLayout as CrosswordLayout).entries) || []).map((e: any) => ({
+            questionId: e.questionId,
+            number: e.number,
+            direction: e.direction,
+            startRow: e.startRow,
+            startCol: e.startCol,
+            length: e.length,
+          })),
+        }
+      : null;
+
     return {
       id: assessment.id,
       courseId: assessment.courseId,
@@ -874,8 +1232,82 @@ export class AssessmentService {
         ? (assessment.passingScore.toNumber ? assessment.passingScore.toNumber() : Number(assessment.passingScore))
         : null,
       isPublished: assessment.isPublished,
+      scheduledPublishAt: assessment.scheduledPublishAt,
+      publishedAt: assessment.publishedAt,
+      crosswordLayout: studentLayout,
       questions,
       totalPoints,
     };
+  }
+
+  /**
+   * Generates a preview CrosswordLayout for an assessment of type CROSSWORD.
+   * Does NOT automatically save the layout to DB (allows preview before confirmation).
+   */
+  public static async generateCrosswordPreview(
+    assessmentId: string,
+    userId: string,
+    role: Role,
+    seed?: string | number
+  ): Promise<CrosswordGeneratorResult> {
+    const assessment = await prisma.assessment.findUnique({
+      where: { id: assessmentId },
+      include: {
+        assessmentQuestions: {
+          include: {
+            question: {
+              include: {
+                options: true,
+              },
+            },
+          },
+          orderBy: { order: 'asc' },
+        },
+      },
+    });
+
+    if (!assessment) {
+      throw new AuthError('Evaluación no encontrada', 404, 'ASSESSMENT_NOT_FOUND');
+    }
+
+    await this.checkManagementPermission(assessment.courseId, userId, role);
+
+    if (assessment.type !== AssessmentType.CROSSWORD) {
+      throw new AuthError('La evaluación debe ser de tipo CROSSWORD para generar un crucigrama', 400, 'INVALID_ASSESSMENT_TYPE');
+    }
+
+    if (!assessment.assessmentQuestions || assessment.assessmentQuestions.length === 0) {
+      throw new AuthError('El crucigrama debe tener al menos 1 pregunta agregada', 400, 'NO_QUESTIONS_FOUND');
+    }
+
+    const entries: CrosswordInputEntry[] = [];
+
+    for (const aq of assessment.assessmentQuestions) {
+      const q = aq.question;
+      if (q.type !== 'CROSSWORD_CLUE') {
+        throw new AuthError(
+          `La pregunta "${q.statement}" no es de tipo CROSSWORD_CLUE. Todas las preguntas del crucigrama deben ser de tipo CROSSWORD_CLUE.`,
+          400,
+          'INVALID_QUESTION_TYPE'
+        );
+      }
+
+      const options = q.options || [];
+      const correctOpt = options.find((o: any) => o.isCorrect) || options[0];
+      if (!correctOpt || !correctOpt.text || correctOpt.text.trim().length === 0) {
+        throw new AuthError(
+          `La pregunta "${q.statement}" no cuenta con una respuesta válida configurada.`,
+          400,
+          'INVALID_QUESTION_CONFIGURATION'
+        );
+      }
+
+      entries.push({
+        questionId: q.id,
+        answer: correctOpt.text,
+      });
+    }
+
+    return CrosswordGeneratorUtil.generate(entries, seed);
   }
 }

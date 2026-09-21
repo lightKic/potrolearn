@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { AssessmentServiceAPI } from '../services/assessment.service.js';
 import { AssessmentAttemptItemDTO, AttemptStatus } from '../types/assessment.js';
 import { ApiError } from '../services/api.js';
+import { PageLoading } from '../components/common/loading/index.js';
 
 type FilterType = 'ALL' | 'SUBMITTED' | 'GRADED';
 
@@ -92,12 +93,7 @@ export const TeacherGradingListPage: React.FC = () => {
   };
 
   if (loading && attempts.length === 0) {
-    return (
-      <div className="loading-container" id="grading-list-loading" style={{ textAlign: 'center', padding: '48px 0' }}>
-        <div className="loading-spinner" />
-        <p className="loading-text" style={{ marginTop: '12px' }}>Cargando lista de intentos...</p>
-      </div>
-    );
+    return <PageLoading title="Cargando lista de intentos..." />;
   }
 
   if (error) {

@@ -1,5 +1,40 @@
 import { AssessmentType, QuestionType } from '@prisma/client';
 
+export interface CrosswordLayoutEntry {
+  questionId: string;
+  number: number;
+  direction: 'ACROSS' | 'DOWN';
+  startRow: number;
+  startCol: number;
+  length: number;
+  answerNormalized: string;
+}
+
+export interface CrosswordLayout {
+  gridSize: {
+    rows: number;
+    columns: number;
+  };
+  entries: CrosswordLayoutEntry[];
+}
+
+export interface StudentCrosswordLayoutEntry {
+  questionId: string;
+  number: number;
+  direction: 'ACROSS' | 'DOWN';
+  startRow: number;
+  startCol: number;
+  length: number;
+}
+
+export interface StudentCrosswordLayout {
+  gridSize: {
+    rows: number;
+    columns: number;
+  };
+  entries: StudentCrosswordLayoutEntry[];
+}
+
 export interface CreateAssessmentInput {
   title: string;
   description?: string | null;
@@ -12,6 +47,9 @@ export interface CreateAssessmentInput {
   timeLimitMinutes?: number | null;
   maxAttempts?: number | null;
   passingScore?: number | null;
+  isPublished?: boolean;
+  scheduledPublishAt?: string | Date | null;
+  crosswordLayout?: CrosswordLayout | null;
 }
 
 export interface UpdateAssessmentInput {
@@ -26,6 +64,9 @@ export interface UpdateAssessmentInput {
   timeLimitMinutes?: number | null;
   maxAttempts?: number | null;
   passingScore?: number | null;
+  isPublished?: boolean;
+  scheduledPublishAt?: string | Date | null;
+  crosswordLayout?: CrosswordLayout | null;
 }
 
 export interface CreateQuestionOptionInput {
@@ -61,6 +102,7 @@ export interface UpdateQuestionInput {
   explanation?: string | null;
   correctNumericValue?: number | string | null;
   numericTolerance?: number | string | null;
+  options?: CreateQuestionOptionInput[];
 }
 
 export interface AddAssessmentQuestionInput {
@@ -130,6 +172,9 @@ export interface AssessmentDTO {
   maxAttempts: number | null;
   passingScore: number | null;
   isPublished: boolean;
+  scheduledPublishAt?: Date | string | null;
+  publishedAt?: Date | string | null;
+  crosswordLayout?: CrosswordLayout | null;
   createdAt: Date | string;
   updatedAt: Date | string;
   questions?: AssessmentQuestionDTO[];
@@ -175,6 +220,9 @@ export interface StudentAssessmentDTO {
   maxAttempts: number | null;
   passingScore: number | null;
   isPublished: boolean;
+  scheduledPublishAt?: Date | string | null;
+  publishedAt?: Date | string | null;
+  crosswordLayout?: StudentCrosswordLayout | null;
   questions?: StudentAssessmentQuestionDTO[];
   totalPoints?: number;
 }
@@ -267,4 +315,37 @@ export interface TeacherAttemptDTO {
   totalOpenTextCount: number;
   pendingOpenTextCount: number;
   answers: TeacherAttemptAnswerDTO[];
+  assessment?: StudentAssessmentDTO;
 }
+
+export interface CreateAttemptGrantInput {
+  quantity: number;
+  reason?: string | null;
+}
+
+export interface AssessmentAttemptGrantDTO {
+  id: string;
+  assessmentId: string;
+  studentId: string;
+  grantedById: string;
+  grantedByName?: string;
+  quantity: number;
+  reason: string | null;
+  createdAt: Date | string;
+}
+
+export interface StudentAttemptSummaryDTO {
+  attemptsUsed: number;
+  maxAttemptsGlobal: number | null;
+  additionalAttemptsGranted: number;
+  effectiveMaxAttempts: number | null;
+  attemptsAvailable: number | null;
+}
+
+export interface StudentAttemptSummaryItemDTO extends StudentAttemptSummaryDTO {
+  studentId: string;
+  studentName: string;
+  studentNumber: string;
+  grantsHistory?: AssessmentAttemptGrantDTO[];
+}
+

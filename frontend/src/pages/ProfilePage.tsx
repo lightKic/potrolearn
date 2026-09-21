@@ -1,18 +1,14 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth.js';
+import { PageLoading } from '../components/common/loading/index.js';
 
 export const ProfilePage: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
 
   if (!user) {
-    return (
-      <div className="loading-content" style={{ padding: '40px' }}>
-        <div className="loading-spinner" />
-        <p className="loading-text">Cargando perfil...</p>
-      </div>
-    );
+    return <PageLoading title="Cargando perfil..." />;
   }
 
   const getRoleLabel = (role: string) => {
@@ -153,8 +149,9 @@ export const ProfilePage: React.FC = () => {
           </div>
         </div>
 
-        {/* Tarjeta de Seguridad & Accesos Administrativos */}
+        {/* Columna Derecha: Seguridad & Admin */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          {/* Tarjeta de Seguridad */}
           <div className="dashboard-card" id="profile-security-card">
             <h2 className="dashboard-card-title" style={{ marginBottom: '16px', borderBottom: '1px solid var(--color-border)', paddingBottom: '12px' }}>
               Seguridad
@@ -180,6 +177,7 @@ export const ProfilePage: React.FC = () => {
             </div>
           </div>
 
+          {/* Tarjeta de Administración de Usuarios (Exclusiva ADMIN) */}
           {user.role === 'ADMIN' && (
             <div className="dashboard-card" id="profile-admin-card">
               <h2 className="dashboard-card-title" style={{ marginBottom: '16px', borderBottom: '1px solid var(--color-border)', paddingBottom: '12px' }}>

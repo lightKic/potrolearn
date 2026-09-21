@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { GradebookServiceAPI } from '../services/gradebook.service.js';
 import { StudentGradesDTO } from '../types/gradebook.js';
 import { ApiError } from '../services/api.js';
+import { PageLoading } from '../components/common/loading/index.js';
 
 export const StudentGradesPage: React.FC = () => {
   const { courseId } = useParams<{ courseId: string }>();
@@ -76,12 +77,7 @@ export const StudentGradesPage: React.FC = () => {
   };
 
   if (loading && !grades) {
-    return (
-      <div className="loading-container" id="student-grades-loading" style={{ textAlign: 'center', padding: '48px 0' }}>
-        <div className="loading-spinner" />
-        <p className="loading-text" style={{ marginTop: '12px' }}>Cargando tus calificaciones...</p>
-      </div>
-    );
+    return <PageLoading title="Cargando tus calificaciones..." />;
   }
 
   if (error || !grades) {

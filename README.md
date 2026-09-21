@@ -35,6 +35,20 @@ potrolearn/
 
 ---
 
+## Assessment Types
+
+PotroLearn soporta múltiples tipos de evaluaciones académicas:
+- **DIAGNOSTIC**: Evaluación diagnóstica de entrada.
+- **PRACTICE**: Evaluaciones de práctica formativa.
+- **QUIZ**: Cuestionarios y quizes rápidos.
+- **EXAM**: Exámenes parciales o acumulativos.
+- **FINAL**: Evaluaciones finales del curso.
+- **CROSSWORD**: Evaluación interactiva de crucigrama con layout dinámico, feedback en tiempo real y revisión docente.
+
+Para consultar los detalles de arquitectura, modelo de datos y flujo del crucigrama, ver la [Documentación Técnica de CROSSWORD](docs/qa/QA-008-CROSSWORD.md).
+
+---
+
 ## Estructura de Carpetas
 
 ### Frontend (`frontend/src/`)

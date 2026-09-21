@@ -9,6 +9,11 @@ import {
   GradeAnswerInput,
   CreateAssessmentInput,
   UpdateAssessmentInput,
+  CreateAttemptGrantInput,
+  AssessmentAttemptGrantDTO,
+  StudentAttemptSummaryDTO,
+  StudentAttemptSummaryItemDTO,
+  CrosswordGeneratorResultDTO,
 } from '../types/assessment.js';
 
 export const AssessmentServiceAPI = {
@@ -37,6 +42,10 @@ export const AssessmentServiceAPI = {
 
   submitAttempt: async (attemptId: string): Promise<AttemptDTO> => {
     return apiFetch<AttemptDTO>(`/attempts/${attemptId}/submit`, { method: 'POST' });
+  },
+
+  abandonAttempt: async (attemptId: string): Promise<AttemptDTO> => {
+    return apiFetch<AttemptDTO>(`/attempts/${attemptId}/abandon`, { method: 'POST' });
   },
 
   getAssessmentAttemptsForReview: async (
@@ -88,5 +97,57 @@ export const AssessmentServiceAPI = {
       method: 'DELETE',
     });
   },
+
+  getMyAttemptSummary: async (assessmentId: string): Promise<StudentAttemptSummaryDTO> => {
+    return apiFetch<StudentAttemptSummaryDTO>(`/assessments/${assessmentId}/my-attempt-summary`, { method: 'GET' });
+  },
+
+  createAttemptGrant: async (
+    assessmentId: string,
+    studentId: string,
+    input: CreateAttemptGrantInput
+  ): Promise<StudentAttemptSummaryItemDTO> => {
+    return apiFetch<StudentAttemptSummaryItemDTO>(`/assessments/${assessmentId}/students/${studentId}/attempt-grants`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+
+  getAssessmentStudentsAttemptSummary: async (
+    assessmentId: string
+  ): Promise<StudentAttemptSummaryItemDTO[]> => {
+    return apiFetch<StudentAttemptSummaryItemDTO[]>(`/assessments/${assessmentId}/students-attempt-summary`, { method: 'GET' });
+  },
+
+  getStudentGrantHistory: async (
+    assessmentId: string,
+    studentId: string
+  ): Promise<AssessmentAttemptGrantDTO[]> => {
+    return apiFetch<AssessmentAttemptGrantDTO[]>(`/assessments/${assessmentId}/students/${studentId}/attempt-grants`, { method: 'GET' });
+  },
+
+  generateCrosswordPreview: async (
+    assessmentId: string,
+    seed?: string | number
+  ): Promise<CrosswordGeneratorResultDTO> => {
+    return apiFetch<CrosswordGeneratorResultDTO>(`/assessments/${assessmentId}/generate-crossword-preview`, {
+      method: 'POST',
+      body: JSON.stringify({ seed }),
+    });
+  },
+
+  checkCrosswordValidation: async (
+    attemptId: string,
+    answers?: Array<{ questionId: string; textValue: string }>
+  ): Promise<Record<string, 'CORRECT' | 'INCORRECT' | 'PENDING'>> => {
+    const res = await apiFetch<{
+      validationMap: Record<string, 'CORRECT' | 'INCORRECT' | 'PENDING'>;
+    }>(`/attempts/${attemptId}/crossword/check`, {
+      method: 'POST',
+      body: JSON.stringify({ answers }),
+    });
+    return res.validationMap;
+  },
 };
+
 

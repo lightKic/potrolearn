@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth.js';
 import { AuthLayout } from '../layouts/AuthLayout.js';
 import { ApiError } from '../services/api.js';
+import { ButtonSpinner } from '../components/common/loading/index.js';
 
 export const ChangePasswordPage: React.FC = () => {
   const { user, changePassword } = useAuth();
@@ -135,7 +136,7 @@ export const ChangePasswordPage: React.FC = () => {
           className="btn-primary"
           disabled={loading}
         >
-          {loading ? 'Actualizando contraseña...' : 'Actualizar contraseña'}
+          {loading ? <><ButtonSpinner /> Actualizando contraseña...</> : 'Actualizar contraseña'}
         </button>
       </form>
     </AuthLayout>

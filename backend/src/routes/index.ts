@@ -7,6 +7,7 @@ import adminRoutes from './admin.routes';
 import assessmentRoutes from './assessment.routes';
 import questionRoutes from './question.routes';
 import attemptRoutes from './attempt.routes';
+import notificationRoutes from './notification.routes';
 
 const router: Router = Router();
 
@@ -18,5 +19,6 @@ router.use('/admin', adminRoutes);
 router.use('/assessments', assessmentRoutes);
 router.use('/questions', questionRoutes);
 router.use('/attempts', attemptRoutes);
+router.use('/notifications', notificationRoutes);
 
 export default router;

@@ -48,4 +48,34 @@ router.put(
   SubjectController.updateSubject
 );
 
+// GET /api/subjects/:subjectId/teachers (ADMIN, TEACHER)
+router.get(
+  '/:subjectId/teachers',
+  authenticate,
+  requireActiveUser,
+  requirePasswordChanged,
+  requireRole(Role.ADMIN, Role.TEACHER),
+  SubjectController.getSubjectTeachers
+);
+
+// POST /api/subjects/:subjectId/teachers (ADMIN únicamente)
+router.post(
+  '/:subjectId/teachers',
+  authenticate,
+  requireActiveUser,
+  requirePasswordChanged,
+  requireRole(Role.ADMIN),
+  SubjectController.assignTeacher
+);
+
+// DELETE /api/subjects/:subjectId/teachers/:teacherId (ADMIN únicamente)
+router.delete(
+  '/:subjectId/teachers/:teacherId',
+  authenticate,
+  requireActiveUser,
+  requirePasswordChanged,
+  requireRole(Role.ADMIN),
+  SubjectController.removeTeacher
+);
+
 export default router;

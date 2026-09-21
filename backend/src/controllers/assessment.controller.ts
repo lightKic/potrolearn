@@ -188,4 +188,23 @@ export class AssessmentController {
       res.status(500).json({ error: { code: 'INTERNAL_SERVER_ERROR', message: 'Error interno del servidor' } });
     }
   }
+
+  public static async generateCrosswordPreview(req: Request, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'No autorizado' } });
+        return;
+      }
+      const { assessmentId } = req.params;
+      const { seed } = req.body;
+      const result = await AssessmentService.generateCrosswordPreview(assessmentId, req.user.id, req.user.role, seed);
+      res.status(200).json({ data: result });
+    } catch (error: unknown) {
+      if (error instanceof AuthError) {
+        res.status(error.statusCode).json({ error: { code: error.code, message: error.message } });
+        return;
+      }
+      res.status(500).json({ error: { code: 'INTERNAL_SERVER_ERROR', message: 'Error interno del servidor' } });
+    }
+  }
 }

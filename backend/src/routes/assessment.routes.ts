@@ -2,12 +2,53 @@ import { Router } from 'express';
 import { Role } from '@prisma/client';
 import { AssessmentController } from '../controllers/assessment.controller';
 import { AttemptController } from '../controllers/attempt.controller';
+import { AttemptGrantController } from '../controllers/attempt-grant.controller';
 import { authenticate } from '../middlewares/authenticate';
 import { requireActiveUser } from '../middlewares/require-active-user';
 import { requirePasswordChanged } from '../middlewares/require-password-changed';
 import { requireRole } from '../middlewares/require-role';
 
 const router = Router();
+
+// GET /api/assessments/:assessmentId/my-attempt-summary (STUDENT)
+router.get(
+  '/:assessmentId/my-attempt-summary',
+  authenticate,
+  requireActiveUser,
+  requirePasswordChanged,
+  requireRole(Role.STUDENT),
+  AttemptGrantController.getMyAttemptSummary
+);
+
+// POST /api/assessments/:assessmentId/students/:studentId/attempt-grants (ADMIN, TEACHER)
+router.post(
+  '/:assessmentId/students/:studentId/attempt-grants',
+  authenticate,
+  requireActiveUser,
+  requirePasswordChanged,
+  requireRole(Role.ADMIN, Role.TEACHER),
+  AttemptGrantController.createGrant
+);
+
+// GET /api/assessments/:assessmentId/students-attempt-summary (ADMIN, TEACHER)
+router.get(
+  '/:assessmentId/students-attempt-summary',
+  authenticate,
+  requireActiveUser,
+  requirePasswordChanged,
+  requireRole(Role.ADMIN, Role.TEACHER),
+  AttemptGrantController.getAssessmentStudentsAttemptSummary
+);
+
+// GET /api/assessments/:assessmentId/students/:studentId/attempt-grants (ADMIN, TEACHER)
+router.get(
+  '/:assessmentId/students/:studentId/attempt-grants',
+  authenticate,
+  requireActiveUser,
+  requirePasswordChanged,
+  requireRole(Role.ADMIN, Role.TEACHER),
+  AttemptGrantController.getStudentGrantHistory
+);
 
 // GET /api/assessments/:assessmentId (ADMIN, TEACHER, STUDENT)
 router.get(
@@ -106,6 +147,16 @@ router.get(
   requirePasswordChanged,
   requireRole(Role.ADMIN, Role.TEACHER),
   AttemptController.getAssessmentAttempts
+);
+
+// POST /api/assessments/:assessmentId/generate-crossword-preview (ADMIN, TEACHER)
+router.post(
+  '/:assessmentId/generate-crossword-preview',
+  authenticate,
+  requireActiveUser,
+  requirePasswordChanged,
+  requireRole(Role.ADMIN, Role.TEACHER),
+  AssessmentController.generateCrosswordPreview
 );
 
 export default router;

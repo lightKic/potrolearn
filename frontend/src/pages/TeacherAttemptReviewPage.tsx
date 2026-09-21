@@ -4,6 +4,8 @@ import { AssessmentServiceAPI } from '../services/assessment.service.js';
 import { TeacherAttemptDTO } from '../types/assessment.js';
 import { ApiError } from '../services/api.js';
 import { MarkdownContent } from '../components/MarkdownContent.js';
+import { PageLoading, ButtonSpinner } from '../components/common/loading/index.js';
+import { CrosswordAttemptReview } from '../components/assessments/CrosswordAttemptReview.js';
 
 export const TeacherAttemptReviewPage: React.FC = () => {
   const { attemptId } = useParams<{ attemptId: string }>();
@@ -176,12 +178,7 @@ export const TeacherAttemptReviewPage: React.FC = () => {
   };
 
   if (loading) {
-    return (
-      <div className="loading-container" id="attempt-review-loading" style={{ textAlign: 'center', padding: '48px 0' }}>
-        <div className="loading-spinner" />
-        <p className="loading-text" style={{ marginTop: '12px' }}>Cargando revisión del intento...</p>
-      </div>
-    );
+    return <PageLoading title="Cargando revisión del intento..." />;
   }
 
   if (error || !attempt) {
@@ -261,8 +258,15 @@ export const TeacherAttemptReviewPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Preguntas */}
-      <h2 style={{ fontSize: '1.25rem', fontWeight: 700, margin: '24px 0 16px 0' }}>Preguntas del Examen</h2>
+      {/* Sección especial de Crucigrama interactivo para evaluaciones de tipo CROSSWORD */}
+      {(attempt.assessment?.type === 'CROSSWORD' || attempt.answers.some((a) => a.type === 'CROSSWORD_CLUE')) && attempt.assessment && (
+        <div style={{ marginTop: '24px' }}>
+          <CrosswordAttemptReview attempt={attempt} assessment={attempt.assessment} />
+        </div>
+      )}
+
+      {/* Detalle por Pregunta */}
+      <h2 style={{ fontSize: '1.25rem', fontWeight: 700, margin: '28px 0 16px 0' }}>Detalle de Respuestas</h2>
 
       <div className="questions-list" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
         {attempt.answers.map((ans, idx) => {
@@ -317,6 +321,12 @@ export const TeacherAttemptReviewPage: React.FC = () => {
                   )
                 ) : ans.type === 'NUMERIC' ? (
                   <p style={{ fontSize: '1rem', fontWeight: 600 }}>{ans.numericValue !== null ? ans.numericValue : 'Sin respuesta'}</p>
+                ) : ans.type === 'CROSSWORD_CLUE' || ans.textValue ? (
+                  ans.textValue ? (
+                    <p style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--color-text)' }}>{ans.textValue}</p>
+                  ) : (
+                    <p style={{ fontStyle: 'italic', color: 'var(--color-muted)', fontSize: '0.9rem' }}>Sin respuesta</p>
+                  )
                 ) : ans.selectedOptions && ans.selectedOptions.length > 0 ? (
                   <ul style={{ paddingLeft: '20px', margin: 0 }}>
                     {ans.selectedOptions.map((opt) => (
@@ -414,9 +424,10 @@ export const TeacherAttemptReviewPage: React.FC = () => {
                     <button
                       type="submit"
                       className="btn btn-primary"
-                      style={{ width: 'auto', display: 'inline-flex', padding: '8px 16px', fontSize: '0.875rem' }}
+                      style={{ width: 'auto', display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '8px 16px', fontSize: '0.875rem' }}
                       disabled={savingQuestionId === ans.questionId}
                     >
+                      {savingQuestionId === ans.questionId && <ButtonSpinner size={14} />}
                       {savingQuestionId === ans.questionId ? 'Guardando...' : 'Guardar Calificación'}
                     </button>
                   </div>

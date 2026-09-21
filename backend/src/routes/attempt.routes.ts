@@ -37,6 +37,26 @@ router.post(
   AttemptController.submitAttempt
 );
 
+// POST /api/attempts/:attemptId/crossword/check (STUDENT only)
+router.post(
+  '/:attemptId/crossword/check',
+  authenticate,
+  requireActiveUser,
+  requirePasswordChanged,
+  requireRole(Role.STUDENT),
+  AttemptController.checkCrosswordValidation
+);
+
+// POST /api/attempts/:attemptId/abandon (STUDENT only)
+router.post(
+  '/:attemptId/abandon',
+  authenticate,
+  requireActiveUser,
+  requirePasswordChanged,
+  requireRole(Role.STUDENT),
+  AttemptController.abandonAttempt
+);
+
 // POST /api/attempts/:attemptId/grade (ADMIN, TEACHER dev/testing)
 router.post(
   '/:attemptId/grade',

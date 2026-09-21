@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { GradebookServiceAPI } from '../services/gradebook.service.js';
 import { TeacherGradebookDTO } from '../types/gradebook.js';
 import { ApiError } from '../services/api.js';
+import { PageLoading } from '../components/common/loading/index.js';
 
 export const TeacherGradebookPage: React.FC = () => {
   const { courseId } = useParams<{ courseId: string }>();
@@ -81,12 +82,7 @@ export const TeacherGradebookPage: React.FC = () => {
   };
 
   if (loading && !gradebook) {
-    return (
-      <div className="loading-container" id="teacher-gradebook-loading" style={{ textAlign: 'center', padding: '48px 0' }}>
-        <div className="loading-spinner" />
-        <p className="loading-text" style={{ marginTop: '12px' }}>Cargando libro de calificaciones...</p>
-      </div>
-    );
+    return <PageLoading title="Cargando libro de calificaciones..." />;
   }
 
   if (error || !gradebook) {

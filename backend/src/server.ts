@@ -1,6 +1,7 @@
 import app from './app';
 import { env } from './config/env';
 import { disconnectPrisma } from './lib/prisma';
+import { ScheduledPublishService } from './services/scheduled-publish.service';
 import { Server } from 'http';
 
 const port = env.port;
@@ -10,10 +11,15 @@ const server: Server = app.listen(port, () => {
   console.log(`  PotroLearn Backend API corriendo en puerto ${port}`);
   console.log(`  Entorno: ${env.nodeEnv}`);
   console.log(`====================================================`);
+
+  // Iniciar worker de publicación programada
+  ScheduledPublishService.start();
 });
 
 const gracefulShutdown = (signal: string) => {
   console.log(`\n[${signal}] Recibida señal de apagado. Cerrando servidor HTTP...`);
+
+  ScheduledPublishService.stop();
 
   server.close(async () => {
     console.log('[HTTP] Servidor HTTP cerrado correctamente.');

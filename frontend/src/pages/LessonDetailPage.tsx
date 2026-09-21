@@ -5,6 +5,7 @@ import { CourseServiceAPI } from '../services/course.service.js';
 import { useAuth } from '../auth/useAuth.js';
 import { ApiError } from '../services/api.js';
 import { MarkdownContent } from '../components/MarkdownContent.js';
+import { PageLoading, ButtonSpinner } from '../components/common/loading/index.js';
 
 export const LessonDetailPage: React.FC = () => {
   const { courseId, moduleId, lessonId } = useParams<{ courseId: string; moduleId: string; lessonId: string }>();
@@ -57,12 +58,7 @@ export const LessonDetailPage: React.FC = () => {
   };
 
   if (loading) {
-    return (
-      <div className="loading-content" style={{ padding: '60px 0' }}>
-        <div className="loading-spinner" />
-        <p className="loading-text">Cargando lección...</p>
-      </div>
-    );
+    return <PageLoading title="Cargando lección..." />;
   }
 
   if (errorMessage || !lesson) {
@@ -107,11 +103,13 @@ export const LessonDetailPage: React.FC = () => {
             onClick={handleToggleProgress}
             disabled={togglingProgress}
           >
-            {togglingProgress
-              ? 'Guardando...'
-              : lesson.completed
-              ? '✓ Lección completada (Marcar pendiente)'
-              : 'Marcar como completada'}
+            {togglingProgress ? (
+              <><ButtonSpinner /> Guardando...</>
+            ) : lesson.completed ? (
+              '✓ Lección completada (Marcar pendiente)'
+            ) : (
+              'Marcar como completada'
+            )}
           </button>
         )}
       </div>

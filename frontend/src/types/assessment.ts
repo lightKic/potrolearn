@@ -1,13 +1,63 @@
-export type AssessmentType = 'DIAGNOSTIC' | 'PRACTICE' | 'QUIZ' | 'EXAM' | 'FINAL';
+export type AssessmentType = 'DIAGNOSTIC' | 'PRACTICE' | 'QUIZ' | 'EXAM' | 'FINAL' | 'CROSSWORD';
 
 export type QuestionType =
   | 'MULTIPLE_CHOICE'
   | 'MULTIPLE_SELECT'
   | 'TRUE_FALSE'
   | 'NUMERIC'
-  | 'OPEN_TEXT';
+  | 'OPEN_TEXT'
+  | 'CROSSWORD_CLUE';
 
 export type AttemptStatus = 'IN_PROGRESS' | 'SUBMITTED' | 'GRADED' | 'ABANDONED';
+
+export interface CrosswordLayoutEntry {
+  questionId: string;
+  number: number;
+  direction: 'ACROSS' | 'DOWN';
+  startRow: number;
+  startCol: number;
+  length: number;
+  answerNormalized: string;
+}
+
+export interface CrosswordLayout {
+  gridSize: {
+    rows: number;
+    columns: number;
+  };
+  entries: CrosswordLayoutEntry[];
+}
+
+export interface CrosswordUnplacedEntry {
+  questionId: string;
+  answerNormalized: string;
+  reason: string;
+}
+
+export interface CrosswordGeneratorResultDTO {
+  success: boolean;
+  layout?: CrosswordLayout;
+  placedEntries?: CrosswordLayoutEntry[];
+  unplacedEntries?: CrosswordUnplacedEntry[];
+  error?: string;
+}
+
+export interface StudentCrosswordLayoutEntry {
+  questionId: string;
+  number: number;
+  direction: 'ACROSS' | 'DOWN';
+  startRow: number;
+  startCol: number;
+  length: number;
+}
+
+export interface StudentCrosswordLayout {
+  gridSize: {
+    rows: number;
+    columns: number;
+  };
+  entries: StudentCrosswordLayoutEntry[];
+}
 
 export interface StudentQuestionOptionDTO {
   id: string;
@@ -47,8 +97,101 @@ export interface StudentAssessmentDTO {
   maxAttempts: number | null;
   passingScore: number | null;
   isPublished: boolean;
+  scheduledPublishAt?: string | null;
+  publishedAt?: string | null;
+  crosswordLayout?: StudentCrosswordLayout | null;
   questions?: StudentAssessmentQuestionDTO[];
   totalPoints?: number;
+}
+
+export interface QuestionOptionDTO {
+  id: string;
+  questionId: string;
+  text: string;
+  isCorrect: boolean;
+  explanation?: string | null;
+  order: number;
+}
+
+export interface QuestionDTO {
+  id: string;
+  subjectId?: string | null;
+  statement: string;
+  type: QuestionType;
+  defaultPoints: number;
+  explanation?: string | null;
+  correctNumericValue?: number | null;
+  numericTolerance?: number | null;
+  createdAt?: string;
+  updatedAt?: string;
+  options?: QuestionOptionDTO[];
+}
+
+export interface AssessmentQuestionDTO {
+  id: string;
+  assessmentId: string;
+  questionId: string;
+  points: number;
+  order: number;
+  question?: QuestionDTO;
+}
+
+export interface AssessmentDTO {
+  id: string;
+  courseId: string;
+  moduleId: string | null;
+  lessonId: string | null;
+  title: string;
+  description: string | null;
+  type: AssessmentType;
+  weight: number;
+  passingScore: number | null;
+  timeLimitMinutes: number | null;
+  maxAttempts: number | null;
+  availableFrom: string | null;
+  availableUntil: string | null;
+  isPublished: boolean;
+  scheduledPublishAt?: string | null;
+  publishedAt?: string | null;
+  crosswordLayout?: CrosswordLayout | null;
+  questions?: AssessmentQuestionDTO[];
+  totalPoints?: number;
+}
+
+export interface CreateQuestionOptionInput {
+  text: string;
+  isCorrect: boolean;
+  explanation?: string | null;
+  order?: number;
+}
+
+export interface UpdateQuestionOptionInput {
+  text?: string;
+  isCorrect?: boolean;
+  explanation?: string | null;
+  order?: number;
+}
+
+export interface CreateQuestionInput {
+  subjectId?: string | null;
+  statement: string;
+  type: QuestionType;
+  defaultPoints?: number;
+  explanation?: string | null;
+  correctNumericValue?: number | string | null;
+  numericTolerance?: number | string | null;
+  options?: CreateQuestionOptionInput[];
+}
+
+export interface UpdateQuestionInput {
+  subjectId?: string | null;
+  statement?: string;
+  type?: QuestionType;
+  defaultPoints?: number;
+  explanation?: string | null;
+  correctNumericValue?: number | string | null;
+  numericTolerance?: number | string | null;
+  options?: CreateQuestionOptionInput[];
 }
 
 export interface CreateAssessmentInput {
@@ -63,6 +206,9 @@ export interface CreateAssessmentInput {
   availableUntil?: string | null;
   moduleId?: string | null;
   lessonId?: string | null;
+  isPublished?: boolean;
+  scheduledPublishAt?: string | null;
+  crosswordLayout?: CrosswordLayout | null;
 }
 
 export interface UpdateAssessmentInput {
@@ -77,6 +223,9 @@ export interface UpdateAssessmentInput {
   availableUntil?: string | null;
   moduleId?: string | null;
   lessonId?: string | null;
+  isPublished?: boolean;
+  scheduledPublishAt?: string | null;
+  crosswordLayout?: CrosswordLayout | null;
 }
 
 export interface SaveAnswerInput {
@@ -167,5 +316,38 @@ export interface TeacherAttemptDTO {
   totalOpenTextCount: number;
   pendingOpenTextCount: number;
   answers: TeacherAttemptAnswerDTO[];
+  assessment?: StudentAssessmentDTO;
 }
+
+export interface CreateAttemptGrantInput {
+  quantity: number;
+  reason?: string | null;
+}
+
+export interface AssessmentAttemptGrantDTO {
+  id: string;
+  assessmentId: string;
+  studentId: string;
+  grantedById: string;
+  grantedByName?: string;
+  quantity: number;
+  reason: string | null;
+  createdAt: string;
+}
+
+export interface StudentAttemptSummaryDTO {
+  attemptsUsed: number;
+  maxAttemptsGlobal: number | null;
+  additionalAttemptsGranted: number;
+  effectiveMaxAttempts: number | null;
+  attemptsAvailable: number | null;
+}
+
+export interface StudentAttemptSummaryItemDTO extends StudentAttemptSummaryDTO {
+  studentId: string;
+  studentName: string;
+  studentNumber: string;
+  grantsHistory?: AssessmentAttemptGrantDTO[];
+}
+
 
